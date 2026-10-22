@@ -52,7 +52,7 @@ ENFORCE_SESSION = os.getenv("ENFORCE_SESSION", "true").lower() == "true"
 DATA_INTERVAL = os.getenv("DATA_INTERVAL", "1h")
 DATA_PERIOD = os.getenv("DATA_PERIOD", "730d")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "nii-gold-forex-bot").strip()
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOKEN = os.getenv("NTFY_TOKEN", "").strip()
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -332,9 +332,14 @@ def main() -> int:
             )
     else:
         lines.append("No signals passed the filters. No trade is a valid decision.")
-    send_ntfy("Advanced 3-hour quant scan", "\n".join(lines))
+    sent = send_ntfy("Advanced 3-hour quant scan", "\n".join(lines))
+    if sent:
+        log.info("ntfy notification accepted by server for topic %s", NTFY_TOPIC)
+    else:
+        log.error("ntfy notification was NOT sent; check NTFY_TOPIC, NTFY_SERVER and NTFY_TOKEN")
     log.info("Saved %s", path)
-    return 0 if result.get("markets_analyzed", 0) > 0 or result.get("status") == "OUTSIDE_SESSION" else 1
+    scan_ok = result.get("markets_analyzed", 0) > 0 or result.get("status") == "OUTSIDE_SESSION"
+    return 2 if not sent else (0 if scan_ok else 1)
 
 
 if __name__ == "__main__":
