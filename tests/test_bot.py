@@ -84,7 +84,8 @@ class BotTests(unittest.TestCase):
             "status": "SIGNAL", "last_price": 1.1, "confidence_score": 0.75,
             "reasons": [],
         })
-        self.assertIn("ACTION: BUY", line)
+        self.assertIn("BUY", line)
+        self.assertIn("TRADE APPROVAL: ACTIONABLE", line)
         self.assertIn("3h outlook RISE", line)
 
     def test_outlook_displays_sell_bias_and_filter_reason(self):
@@ -93,7 +94,8 @@ class BotTests(unittest.TestCase):
             "status": "NO_TRADE", "last_price": 60000, "confidence_score": 0.58,
             "reasons": ["directional score below threshold"],
         })
-        self.assertIn("DIRECTIONAL BIAS: SELL (NOT ACTIONABLE)", line)
+        self.assertIn("WEAK SELL", line)
+        self.assertIn("TRADE APPROVAL: NOT ACTIONABLE (NO_TRADE)", line)
         self.assertIn("directional score below threshold", line)
 
     def test_outlook_waits_when_direction_is_uncertain(self):
@@ -102,14 +104,35 @@ class BotTests(unittest.TestCase):
             "status": "NO_TRADE", "last_price": 1.0, "confidence_score": 0.5,
             "reasons": [],
         })
-        self.assertIn("WAIT: no clear directional bias", line)
+        self.assertIn("WAIT", line)
+
+    def test_strong_directional_call_is_separate_from_approval(self):
+        line = bot.format_directional_outlook({
+            "market": "Gold", "direction": "SHORT", "forecast_outlook": "FALL",
+            "status": "NO_TRADE", "last_price": 4000, "confidence_score": 0.90,
+            "reasons": ["EMA trend alignment bearish", "3-bar momentum negative"],
+        })
+        self.assertIn("STRONG SELL", line)
+        self.assertIn("TRADE APPROVAL: NOT ACTIONABLE (NO_TRADE)", line)
+        self.assertIn("current price 4000", line)
+        self.assertIn("reasons:", line)
+
+    def test_conflicting_directional_evidence_returns_wait(self):
+        line = bot.format_directional_outlook({
+            "market": "USD/JPY", "direction": "SHORT", "forecast_outlook": "FALL",
+            "status": "NO_TRADE", "last_price": 157, "confidence_score": 0.85,
+            "reasons": ["EMA trend alignment bearish", "3-bar momentum positive"],
+        })
+        self.assertIn("WAIT", line)
+        self.assertIn("TRADE APPROVAL: NOT ACTIONABLE", line)
 
     def test_outlook_handles_missing_or_invalid_optional_fields(self):
         line = bot.format_directional_outlook({
             "market": "Test", "direction": "SHORT", "status": "NO_TRADE",
             "confidence_score": None, "reasons": "low confidence",
         })
-        self.assertIn("DIRECTIONAL BIAS: SELL (NOT ACTIONABLE)", line)
+        self.assertIn("WAIT", line)
+        self.assertIn("TRADE APPROVAL: NOT ACTIONABLE (NO_TRADE)", line)
         self.assertIn("heuristic score 0%", line)
         self.assertIn("low confidence", line)
 
