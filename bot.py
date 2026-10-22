@@ -388,14 +388,19 @@ def send_ntfy(title: str, message: str) -> bool:
     headers = {"Title": title, "Priority": "default", "Tags": "chart_with_upwards_trend"}
     if NTFY_TOKEN:
         headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
-    try:
-        r = requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=message.encode(),
-                          headers=headers, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return True
-    except requests.RequestException as exc:
-        log.error("ntfy notification failed: %s", exc)
-        return False
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=message.encode(),
+                              headers=headers, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            if attempt > 1:
+                log.info("ntfy notification delivered after retry %d", attempt - 1)
+            return True
+        except requests.RequestException as exc:
+            log.error("ntfy notification attempt %d/3 failed: %s", attempt, exc)
+            if attempt < 3:
+                time.sleep(attempt * 2)
+    return False
 
 
 def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
@@ -501,8 +506,16 @@ def main() -> int:
             f"Forecast horizon: next {HORIZON_BARS} hours | using historical hourly OHLC data",
             f"Markets analysed: {result.get('markets_analyzed', 0)}/{len(MARKETS)}",
             "Signals are heuristic research, not guaranteed predictions or win probabilities. No orders are placed.",
+            f"Data quality: {len(result.get('failures', []))} market(s) failed; {result.get('markets_analyzed', 0)}/{len(MARKETS)} analysed.",
             "",
         ]
+        if result.get("failures"):
+            lines.append("DATA QUALITY WARNING — unavailable or invalid market data:")
+            for failure in result["failures"][:6]:
+                lines.append(f'- {failure.get("market", "Unknown")}: {failure.get("reason", "unknown error")}')
+            if len(result["failures"]) > 6:
+                lines.append(f'- Plus {len(result["failures"]) - 6} additional market failure(s); see the workflow artifact.')
+            lines.append("")
         high_vol = [s for s in result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
         if high_vol:
             lines.append("Unusually high volatility vs recent ATR baseline:")
