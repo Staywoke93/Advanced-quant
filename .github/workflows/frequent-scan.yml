@@ -5,7 +5,7 @@ on:
     # Hourly monitoring scans at :20 UTC every day, excluding existing session-alert UTC hours
     # (00, 01, 07, 08, 09, 12, 13, 14, 15) to avoid colliding with those alerts.
     # The core bot's signal horizon remains 3 hours; this workflow does not change that logic.
-    - cron: "20 2-6,10-11,16-23 * * *"
+    - cron: "20 * * * *"
   workflow_dispatch:
 
 permissions:
