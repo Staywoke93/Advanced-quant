@@ -437,6 +437,12 @@ def main() -> int:
     validate_config()
     now = utc_now()
     events = session_events(now)
+    # Manual workflow dispatches explicitly request a real scan at any time.
+    # Scheduled runs do not set this flag, so their session alerts remain unchanged.
+    force_scan = os.getenv("FORCE_MARKET_SCAN", "false").strip().lower() == "true"
+    if force_scan:
+        events = [{"mode": "scan", "name": "Manual on-demand scan",
+                   "open_gmt": now.isoformat(), "age_minutes": 0}]
     if not events:
         timestamp = format_gmt(now.isoformat())
         log.info("No session-open or one-hour follow-up event at %s; sending bot-alive test notification.", timestamp)
