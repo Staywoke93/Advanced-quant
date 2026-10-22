@@ -46,6 +46,15 @@ class BotTests(unittest.TestCase):
         self.assertEqual(result["markets_requested"], len(bot.MARKETS))
         self.assertEqual(result["markets_analyzed"], 0)
 
+    def test_upcoming_session_window_is_gmt_and_three_hours(self):
+        now = datetime(2025, 1, 6, 6, 30, tzinfo=timezone.utc)
+        windows = bot.upcoming_session_windows(now)
+        self.assertTrue(windows)
+        self.assertIn("London", windows[0]["event"])
+        start = datetime.fromisoformat(windows[0]["suggested_entry_start_gmt"])
+        end = datetime.fromisoformat(windows[0]["suggested_entry_end_gmt"])
+        self.assertEqual((end - start).total_seconds(), 3 * 3600)
+
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE
         try:
