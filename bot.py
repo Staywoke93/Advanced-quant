@@ -430,7 +430,7 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
 
 
 def format_directional_outlook(signal: dict) -> str:
-    """Render direction separately from whether the setup passed trade filters."""
+    """Render a clear three-hour direction independently of trade approval."""
     direction = signal.get("direction", "NO_TRADE")
     side = "BUY" if direction == "LONG" else "SELL" if direction == "SHORT" else "WAIT"
     status = signal.get("status", "NO_TRADE")
@@ -444,18 +444,27 @@ def format_directional_outlook(signal: dict) -> str:
     reasons = signal.get("reasons", [])
     if not isinstance(reasons, (list, tuple)):
         reasons = [str(reasons)] if reasons else []
-    if status == "SIGNAL" and side in ("BUY", "SELL"):
-        decision = f"ACTION: {side}"
-    elif side in ("BUY", "SELL"):
-        decision = f"DIRECTIONAL BIAS: {side} (NOT ACTIONABLE)"
+    reason_text = "; ".join(str(reason) for reason in reasons) if reasons else "no indicator reasons supplied"
+
+    # If directional evidence explicitly conflicts, don't manufacture a strong call.
+    reason_lower = " ".join(str(reason).lower() for reason in reasons)
+    conflict = (
+        ("ema trend alignment bullish" in reason_lower and "momentum negative" in reason_lower)
+        or ("ema trend alignment bearish" in reason_lower and "momentum positive" in reason_lower)
+        or ("bullish" in reason_lower and "bearish" in reason_lower)
+    )
+    if side == "WAIT" or conflict or outlook == "UNCERTAIN":
+        call = "WAIT — mixed/uncertain indicators"
+    elif score >= 0.80:
+        call = f"STRONG {side}"
+    elif score >= 0.65:
+        call = side
     else:
-        decision = "WAIT: no clear directional bias"
-    reason_text = "; ".join(reasons) if reasons else "no filter details supplied"
-    line = (f"- {market}: {decision} | 3h outlook {outlook} | current price {price} "
-            f"| heuristic score {score:.0%} | status {status}")
-    if status != "SIGNAL":
-        line += f" | reason: {reason_text}"
-    return line
+        call = f"WEAK {side}"
+
+    approval = "ACTIONABLE" if status == "SIGNAL" else f"NOT ACTIONABLE ({status})"
+    return (f"- {market}: {call} | TRADE APPROVAL: {approval} | 3h outlook {outlook} "
+            f"| current price {price} | heuristic score {score:.0%} | reasons: {reason_text}")
 
 
 def send_ntfy(title: str, message: str) -> bool:
@@ -605,9 +614,12 @@ def main() -> int:
         # Directional outlook for every analysed market, including filtered/no-trade markets.
         lines.append("\nTHREE-HOUR BUY / SELL OUTLOOK (directional estimate, not guaranteed):")
         lines.append("ACTION means the setup passed configured filters. DIRECTIONAL BIAS is informational only when filters reject a trade.")
+        review_start = now
+        review_end = now + timedelta(hours=HORIZON_BARS)
         for s in result.get("signals", []):
             lines.append(format_directional_outlook(s))
-        lines.append("Direction uses EMA trend, recent momentum and RSI from historical hourly candles; score is not a probability.")
+            lines.append(f'  Three-hour GMT review window: {format_gmt(review_start.isoformat())} to {format_gmt(review_end.isoformat())}')
+        lines.append("Direction uses EMA trend, recent momentum and RSI from historical hourly candles; score is a ranking heuristic, not a probability.")
         lines.append("")
         high_vol = [s for s in result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
         if high_vol:
