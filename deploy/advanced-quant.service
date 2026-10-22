@@ -1,0 +1,20 @@
+[Unit]
+Description=Advanced Quant hourly market research scanner
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=advancedquant
+Group=advancedquant
+WorkingDirectory=/opt/advanced-quant
+EnvironmentFile=/etc/advanced-quant.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/advanced-quant/.venv/bin/python /opt/advanced-quant/service_runner.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
