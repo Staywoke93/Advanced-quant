@@ -437,8 +437,13 @@ def format_directional_outlook(signal: dict) -> str:
     market = signal.get("market", "Unknown market")
     outlook = signal.get("forecast_outlook", "UNCERTAIN")
     price = signal.get("last_price", "n/a")
-    score = float(signal.get("confidence_score", 0.0))
+    try:
+        score = float(signal.get("confidence_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
     reasons = signal.get("reasons", [])
+    if not isinstance(reasons, (list, tuple)):
+        reasons = [str(reasons)] if reasons else []
     if status == "SIGNAL" and side in ("BUY", "SELL"):
         decision = f"ACTION: {side}"
     elif side in ("BUY", "SELL"):
@@ -481,7 +486,13 @@ def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
     # Session-open scans are intentionally allowed before the old fixed session.
     results, failures = [], []
     for market, symbol in MARKETS.items():
-        raw = fetcher(symbol)
+        # A single provider/network failure must not abort the whole market scan.
+        try:
+            raw = fetcher(symbol)
+        except Exception as exc:
+            log.exception("Data fetch error for %s", market)
+            failures.append({"market": market, "reason": f"data fetch failed: {exc}"})
+            continue
         if raw is None:
             failures.append({"market": market, "reason": "data unavailable"})
             continue
@@ -489,9 +500,11 @@ def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
             sig = analyze(market, symbol, raw, now)
             if sig:
                 results.append(asdict(sig))
+            else:
+                failures.append({"market": market, "reason": "insufficient or invalid data for analysis"})
         except Exception as exc:
             log.exception("Analysis error for %s", market)
-            failures.append({"market": market, "reason": str(exc)})
+            failures.append({"market": market, "reason": f"analysis failed: {exc}"})
     eligible = [s for s in results if s["status"] == "SIGNAL"]
     eligible.sort(key=lambda s: s["confidence_score"], reverse=True)
     for s in eligible[MAX_SIMULTANEOUS_SIGNALS:]:
