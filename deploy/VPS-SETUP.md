@@ -21,8 +21,8 @@ Run:
 sudo apt update
 sudo apt upgrade -y
 sudo apt install -y python3 python3-venv python3-pip git
-sudo useradd --system --create-home --home-dir /opt/advanced-quant --shell /usr/sbin/nologin advancedquant
-sudo chown advancedquant:advancedquant /opt/advanced-quant
+sudo useradd --system --create-home --home-dir /home/advancedquant --shell /usr/sbin/nologin advancedquant
+sudo install -d -o advancedquant -g advancedquant -m 0750 /opt/advanced-quant
 ```
 
 If the user or directory already exists, inspect it rather than blindly rerunning
