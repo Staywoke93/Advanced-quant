@@ -71,6 +71,7 @@ class Signal:
     horizon_hours: int
     session_utc: str
     atr_pct: float
+    volatility_ratio: float
     stop_distance_pct: float
     target_distance_pct: float
     risk_budget: float
@@ -145,6 +146,57 @@ def upcoming_session_windows(now: datetime, horizon_hours: int = HORIZON_BARS) -
         "suggested_entry_end_gmt": (open_utc + timedelta(hours=horizon_hours)).isoformat(),
         "minutes_until_open": max(0, round((open_utc - now).total_seconds() / 60)),
     }]
+
+
+
+def session_events(now: datetime) -> list[dict]:
+    """Identify session opens and one-hour follow-up scans; tolerate Actions queue delays."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    events = []
+    for definition in SESSION_DEFINITIONS:
+        zone = ZoneInfo(definition["timezone"])
+        local_now = now.astimezone(zone)
+        for day_offset in (-1, 0):
+            day = (local_now + timedelta(days=day_offset)).date()
+            if day.weekday() >= 5:
+                continue
+            opened = datetime(day.year, day.month, day.day,
+                              definition["open_hour"], definition["open_minute"],
+                              tzinfo=zone).astimezone(timezone.utc)
+            age = (now - opened).total_seconds() / 60
+            if 0 <= age <= 25:
+                events.append({"mode": "open", "name": definition["name"],
+                               "open_gmt": opened.isoformat(), "age_minutes": round(age)})
+            elif 55 <= age <= 85:
+                events.append({"mode": "scan", "name": definition["name"],
+                               "open_gmt": opened.isoformat(), "age_minutes": round(age)})
+    # NY open is the start of the major US/European overlap while both European sessions are active.
+    if any(e["name"] == "New York" and e["mode"] == "open" for e in events):
+        names = {d["name"] for d in SESSION_DEFINITIONS}
+        if {"London", "Frankfurt", "New York"}.issubset(names):
+            ny = next(d for d in SESSION_DEFINITIONS if d["name"] == "New York")
+            london = next(d for d in SESSION_DEFINITIONS if d["name"] == "London")
+            frankfurt = next(d for d in SESSION_DEFINITIONS if d["name"] == "Frankfurt")
+            def is_open(definition):
+                z = ZoneInfo(definition["timezone"])
+                local = now.astimezone(z)
+                if local.weekday() >= 5:
+                    return False
+                opened = datetime(local.year, local.month, local.day,
+                                  definition["open_hour"], definition["open_minute"], tzinfo=z)
+                close_hour = 17
+                closed = datetime(local.year, local.month, local.day, close_hour, 0, tzinfo=z)
+                return opened <= local < closed
+            if is_open(london) and is_open(frankfurt) and is_open(ny):
+                events.append({"mode": "overlap", "name": "London–Frankfurt–New York overlap",
+                               "open_gmt": now.isoformat(), "age_minutes": 0})
+    # Deduplicate and prioritize overlap/open alerts over the one-hour follow-up scan.
+    unique = {}
+    for event in events:
+        unique[(event["mode"], event["name"])] = event
+    return list(unique.values())
 
 
 def format_gmt(iso_value: str) -> str:
@@ -312,6 +364,9 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
         status = "OUTSIDE_SESSION"
         reasons.append("outside configured three-hour session")
     risk_budget = ACCOUNT_EQUITY * RISK_PER_TRADE
+    # Compare current ATR with its recent 24-bar median to detect unusual volatility.
+    atr_baseline = float(f["atr_pct"].tail(24).median())
+    volatility_ratio = atr_pct / atr_baseline if atr_baseline > 0 else 1.0
     # Approximate notional sizing: stop loss ~= risk budget before costs; capped at 1x equity.
     suggested_notional = min(ACCOUNT_EQUITY, risk_budget / stop_pct) if stop_pct > 0 else 0.0
     return Signal(
@@ -319,7 +374,8 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
         last_price=round(price, 8), direction=direction,
         confidence_score=round(confidence, 3), confidence_is_probability=False,
         horizon_hours=HORIZON_BARS, session_utc=f"{SESSION_START_UTC}-{SESSION_END_UTC}",
-        atr_pct=round(atr_pct * 100, 3), stop_distance_pct=round(stop_pct * 100, 3),
+        atr_pct=round(atr_pct * 100, 3), volatility_ratio=round(volatility_ratio, 2),
+        stop_distance_pct=round(stop_pct * 100, 3),
         target_distance_pct=round(target_pct * 100, 3), risk_budget=round(risk_budget, 2),
         suggested_notional=round(suggested_notional, 2), status=status, reasons=reasons
     )
@@ -380,55 +436,80 @@ def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
 def main() -> int:
     validate_config()
     now = utc_now()
-    result = scan(now)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / f"scan-{now.date().isoformat()}.json"
-    path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    actionable = [s for s in result.get("signals", []) if s["status"] == "SIGNAL"]
-    lines = [
-        f"Advanced quant session scan | {now:%Y-%m-%d %H:%M GMT}",
-        f"Horizon: {HORIZON_BARS} hourly bars | risk budget: {RISK_PER_TRADE:.2%} per signal",
-        f"Markets analysed: {result.get('markets_analyzed', 0)}/{len(MARKETS)}",
-        "Research alerts only. Confidence is NOT a win probability. No orders are placed.",
-        ""
-    ]
-    windows = result.get("session_windows", [])
-    if windows:
-        window = windows[0]
-        lines.append(f"Upcoming session: {window['event']}")
-        lines.append(f"Session opens: {format_gmt(window['session_open_gmt'])}")
-        lines.append(
-            f"Suggested entry window: {format_gmt(window['suggested_entry_start_gmt'])} "
-            f"to {format_gmt(window['suggested_entry_end_gmt'])}"
-        )
-        lines.append("Entry window is a planning guide, not a guarantee; reassess the live price before entering.")
-    else:
-        lines.append("No major session open is within the next 90 minutes.")
-    lines.append("")
-    if actionable:
-        for s in actionable:
-            lines.append(
-                f'{s["market"]} ({s["symbol"]}): {s["direction"]} | price {s["last_price"]} | '
-                f'score {s["confidence_score"]:.0%} (heuristic) | stop {s["stop_distance_pct"]:.2f}% | '
-                f'target {s["target_distance_pct"]:.2f}% | risk budget {s["risk_budget"]:.2f} {ACCOUNT_CURRENCY} | '
-                f'approx notional {s["suggested_notional"]:.2f}'
-            )
-    elif result.get("markets_analyzed", 0) == 0:
-        lines.append("DATA ERROR: zero markets were analysed. This is not a no-signal result.")
-        for failure in result.get("failures", [])[:4]:
-            lines.append(f'Data issue — {failure.get("market", "Unknown")}: {failure.get("reason", "unknown error")}')
-        lines.append("Check the GitHub Actions scan logs and the market-data provider.")
-    else:
-        lines.append("No signals passed the filters. No trade is a valid decision.")
-    sent = send_ntfy("Advanced 3-hour quant scan", "\n".join(lines))
-    if sent:
-        log.info("ntfy notification accepted by server for topic %s", NTFY_TOPIC)
-    else:
-        log.error("ntfy notification was NOT sent; check NTFY_TOPIC, NTFY_SERVER and NTFY_TOKEN")
-    log.info("Saved %s", path)
-    scan_ok = result.get("markets_analyzed", 0) > 0
-    return 2 if not sent else (0 if scan_ok else 1)
+    events = session_events(now)
+    if not events:
+        log.info("No session-open or one-hour follow-up event at %s; no notification sent.", format_gmt(now.isoformat()))
+        return 0
 
+    open_events = [event for event in events if event["mode"] in ("open", "overlap")]
+    scan_events = [event for event in events if event["mode"] == "scan"]
+
+    if open_events:
+        names = sorted({event["name"] for event in open_events})
+        message = [
+            f"Market session opened | {format_gmt(now.isoformat())}",
+            "Session(s): " + ", ".join(names),
+            "Times shown in GMT (UTC+0).",
+        ]
+        if any(event["mode"] == "overlap" for event in open_events):
+            # Evaluate historical volatility at the overlap opening; do not assume overlap always means high volatility.
+            overlap_result = scan(now)
+            high_vol = [s for s in overlap_result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
+            message.append(f"Historical-volatility check: {len(high_vol)} market(s) at least 1.5x their recent 24-hour ATR baseline.")
+            if high_vol:
+                message.append("HIGH VOLATILITY DETECTED:")
+                for s in sorted(high_vol, key=lambda item: item.get("volatility_ratio", 1), reverse=True)[:6]:
+                    message.append(f'{s["market"]}: {s["volatility_ratio"]:.2f}x recent ATR | {s["direction"]} ({s["status"]})')
+            else:
+                message.append("No unusual volatility threshold was met; overlap alone is not a trade signal.")
+        sent = send_ntfy("Market session opened", "\n".join(message))
+        if not sent:
+            log.error("Could not send session-open notification.")
+            return 2
+
+    if scan_events:
+        result = scan(now)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        path = OUTPUT_DIR / f"scan-{now.date().isoformat()}-{now:%H%M}.json"
+        path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        actionable = [s for s in result.get("signals", []) if s["status"] == "SIGNAL"]
+        lines = [
+            f"Advanced quant follow-up scan | {format_gmt(now.isoformat())}",
+            f"Session(s): {', '.join(sorted({e['name'] for e in scan_events}))}",
+            f"Forecast horizon: next {HORIZON_BARS} hours | using historical hourly OHLC data",
+            f"Markets analysed: {result.get('markets_analyzed', 0)}/{len(MARKETS)}",
+            "Signals are heuristic research, not guaranteed predictions or win probabilities. No orders are placed.",
+            "",
+        ]
+        high_vol = [s for s in result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
+        if high_vol:
+            lines.append("Unusually high volatility vs recent ATR baseline:")
+            for s in sorted(high_vol, key=lambda item: item.get("volatility_ratio", 1), reverse=True)[:6]:
+                lines.append(f'{s["market"]}: {s["volatility_ratio"]:.2f}x | {s["direction"]} ({s["status"]})')
+            lines.append("")
+        if actionable:
+            for s in sorted(actionable, key=lambda item: item["confidence_score"], reverse=True):
+                lines.append(
+                    f'{s["market"]} ({s["symbol"]}): {s["direction"]} / '
+                    f'{"BUY" if s["direction"] == "LONG" else "SELL"} | price {s["last_price"]} | '
+                    f'score {s["confidence_score"]:.0%} (heuristic) | volatility {s.get("volatility_ratio", 1):.2f}x | '
+                    f'stop {s["stop_distance_pct"]:.2f}% | target {s["target_distance_pct"]:.2f}% | '
+                    f'risk budget {s["risk_budget"]:.2f} {ACCOUNT_CURRENCY}'
+                )
+                lines.append(f'  Suggested GMT review window: {format_gmt(now.isoformat())} to {format_gmt((now + timedelta(hours=HORIZON_BARS)).isoformat())}')
+        elif result.get("markets_analyzed", 0) == 0:
+            lines.append("DATA ERROR: zero markets were analysed; this is not a no-signal result.")
+            for failure in result.get("failures", [])[:4]:
+                lines.append(f'Data issue — {failure.get("market", "Unknown")}: {failure.get("reason", "unknown error")}')
+        else:
+            lines.append("No signals passed the filters. No trade is a valid decision.")
+        if not send_ntfy("Advanced 3-hour buy/sell signals", "\n".join(lines)):
+            log.error("Could not send follow-up scan notification.")
+            return 2
+        log.info("Saved %s", path)
+        if result.get("markets_analyzed", 0) == 0:
+            return 1
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
