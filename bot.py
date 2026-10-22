@@ -212,6 +212,42 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def market_data_staleness_reason(symbol: str, index: pd.Index,
+                                now: Optional[datetime] = None) -> Optional[str]:
+    """Reject stale hourly candles while allowing normal FX/futures weekend closures."""
+    if len(index) == 0:
+        return "no candle timestamps"
+    now = now or utc_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    latest = pd.Timestamp(index[-1])
+    if latest.tzinfo is None:
+        return "latest candle timestamp is timezone-naive; freshness cannot be verified"
+    latest = latest.tz_convert("UTC").to_pydatetime()
+    age_hours = (now - latest).total_seconds() / 3600
+    if age_hours < -0.25:
+        return f"latest candle is in the future ({age_hours:.1f} hours relative to current UTC time)"
+    if symbol.endswith("-USD") and symbol in {"BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"}:
+        max_age = 3
+    elif symbol == "GC=F":
+        # Gold futures are closed over the weekend; don't mistake a normal closure for stale data.
+        if now.weekday() >= 5 or (now.weekday() == 4 and now.hour >= 22):
+            max_age = 72
+        else:
+            max_age = 6
+    else:
+        # Yahoo FX symbols trade roughly 24/5; tolerate weekend and Sunday pre-open gaps.
+        fx_closed = (now.weekday() == 5 or
+                     (now.weekday() == 4 and now.hour >= 22) or
+                     (now.weekday() == 6 and now.hour < 22))
+        max_age = 72 if fx_closed else 4
+    if age_hours > max_age:
+        return (f"stale hourly data: latest candle is {age_hours:.1f} hours old "
+                f"(limit {max_age} hours for this market/session)")
+    return None
+
+
 def fetch_history(symbol: str, period: str = DATA_PERIOD, interval: str = DATA_INTERVAL,
                   retries: int = 3) -> Optional[pd.DataFrame]:
     """Fetch OHLC data with retries, basic schema validation and stale/empty-data rejection."""
@@ -235,6 +271,11 @@ def fetch_history(symbol: str, period: str = DATA_PERIOD, interval: str = DATA_I
                 raise ValueError("; ".join(validation["errors"]))
             if validation["warnings"]:
                 log.warning("%s data validation warnings: %s", symbol, "; ".join(validation["warnings"]))
+            stale_reason = market_data_staleness_reason(symbol, df.index)
+            if stale_reason:
+                raise ValueError(stale_reason)
+            log.info("%s data freshness OK: latest candle %s UTC",
+                     symbol, pd.Timestamp(df.index[-1]).tz_convert("UTC").isoformat())
             return df
         except Exception as exc:
             wait = 2 ** attempt + random.random()
