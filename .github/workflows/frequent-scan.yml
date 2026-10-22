@@ -1,0 +1,54 @@
+name: Advanced quant frequent scan
+
+on:
+  schedule:
+    # Additional scans, deliberately outside the existing session-alert cron hours.
+    # These run independently so the existing session-open and follow-up alerts remain unchanged.
+    - cron: "5 2,5,11,17,20,23 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advanced-quant-frequent-scan
+  cancel-in-progress: false
+
+jobs:
+  frequent-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run automated tests
+        run: python -m unittest discover -s tests -v
+      - name: Run on-demand market scan
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'nii-gold-forex-bot' }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_SERVER: ${{ vars.NTFY_SERVER || 'https://ntfy.sh' }}
+          ACCOUNT_EQUITY: ${{ vars.ACCOUNT_EQUITY || '1000' }}
+          ACCOUNT_CURRENCY: ${{ vars.ACCOUNT_CURRENCY || 'USD' }}
+          SESSION_START_UTC: "00:00"
+          SESSION_END_UTC: "00:00"
+          ENFORCE_SESSION: "false"
+          FORCE_MARKET_SCAN: "true"
+          RISK_PER_TRADE: "0.0025"
+          DAILY_LOSS_LIMIT: "0.01"
+          MAX_SIMULTANEOUS_SIGNALS: "2"
+          MIN_CONFIDENCE: "0.64"
+        run: python bot.py
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: advanced-quant-frequent-report-${{ github.run_id }}
+          path: output/
+          if-no-files-found: ignore
+          retention-days: 30
