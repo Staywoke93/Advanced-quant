@@ -429,6 +429,30 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
     )
 
 
+def format_directional_outlook(signal: dict) -> str:
+    """Render direction separately from whether the setup passed trade filters."""
+    direction = signal.get("direction", "NO_TRADE")
+    side = "BUY" if direction == "LONG" else "SELL" if direction == "SHORT" else "WAIT"
+    status = signal.get("status", "NO_TRADE")
+    market = signal.get("market", "Unknown market")
+    outlook = signal.get("forecast_outlook", "UNCERTAIN")
+    price = signal.get("last_price", "n/a")
+    score = float(signal.get("confidence_score", 0.0))
+    reasons = signal.get("reasons", [])
+    if status == "SIGNAL" and side in ("BUY", "SELL"):
+        decision = f"ACTION: {side}"
+    elif side in ("BUY", "SELL"):
+        decision = f"DIRECTIONAL BIAS: {side} (NOT ACTIONABLE)"
+    else:
+        decision = "WAIT: no clear directional bias"
+    reason_text = "; ".join(reasons) if reasons else "no filter details supplied"
+    line = (f"- {market}: {decision} | 3h outlook {outlook} | current price {price} "
+            f"| heuristic score {score:.0%} | status {status}")
+    if status != "SIGNAL":
+        line += f" | reason: {reason_text}"
+    return line
+
+
 def send_ntfy(title: str, message: str) -> bool:
     if not NTFY_TOPIC:
         log.info("NTFY_TOPIC unset; skipping push")
@@ -566,11 +590,11 @@ def main() -> int:
                 lines.append(f'- Plus {len(result["failures"]) - 6} additional market failure(s); see the workflow artifact.')
             lines.append("")
         # Directional outlook for every analysed market, including filtered/no-trade markets.
-        lines.append("\nTHREE-HOUR PRICE OUTLOOK (directional estimate, not guaranteed):")
+        lines.append("\nTHREE-HOUR BUY / SELL OUTLOOK (directional estimate, not guaranteed):")
+        lines.append("ACTION means the setup passed configured filters. DIRECTIONAL BIAS is informational only when filters reject a trade.")
         for s in result.get("signals", []):
-            outlook = s.get("forecast_outlook", "UNCERTAIN")
-            lines.append("- {}: {} over next {}h | current {} | status {} | heuristic score {:.0%}".format(s["market"], outlook, HORIZON_BARS, s["last_price"], s["status"], s["confidence_score"]))
-        lines.append("Based on EMA trend, recent momentum and RSI from historical hourly candles; score is not a probability.")
+            lines.append(format_directional_outlook(s))
+        lines.append("Direction uses EMA trend, recent momentum and RSI from historical hourly candles; score is not a probability.")
         lines.append("")
         high_vol = [s for s in result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
         if high_vol:
