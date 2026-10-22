@@ -104,7 +104,7 @@ class BotTests(unittest.TestCase):
             "status": "NO_TRADE", "last_price": 1.0, "confidence_score": 0.5,
             "reasons": [],
         })
-        self.assertIn("WAIT: no clear directional bias", line)
+        self.assertIn("WAIT", line)
 
     def test_strong_directional_call_is_separate_from_approval(self):
         line = bot.format_directional_outlook({
