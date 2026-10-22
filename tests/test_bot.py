@@ -222,6 +222,31 @@ class BotTests(unittest.TestCase):
              patch("bot.time.sleep"):
             self.assertFalse(bot.send_ntfy("Test alert", "Test message"))
 
+    def test_conflicting_six_bar_momentum_forces_wait(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "LONG", "forecast_outlook": "RISE",
+            "status": "SIGNAL", "last_price": 1.0, "confidence_score": 0.90,
+            "reasons": ["EMA trend alignment bullish", "6-bar momentum negative"],
+        })
+        self.assertIn("WAIT", line)
+
+    def test_conflicting_rsi_and_trend_forces_wait(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "LONG", "forecast_outlook": "RISE",
+            "status": "SIGNAL", "last_price": 1.0, "confidence_score": 0.90,
+            "reasons": ["EMA trend alignment bullish", "overbought caution (78.0)"],
+        })
+        self.assertIn("WAIT", line)
+
+    def test_negative_signal_cap_is_rejected(self):
+        old = bot.MAX_SIMULTANEOUS_SIGNALS
+        try:
+            bot.MAX_SIMULTANEOUS_SIGNALS = -1
+            with self.assertRaises(ValueError):
+                bot.validate_config()
+        finally:
+            bot.MAX_SIMULTANEOUS_SIGNALS = old
+
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE
         try:
