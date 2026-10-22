@@ -56,6 +56,28 @@ class BotTests(unittest.TestCase):
                                      freq="h", tz="UTC")
         self.assertIn("in the future", bot.market_data_staleness_reason("BTC-USD", future_index, now))
 
+    def test_three_hour_outlook_labels_bullish_signal_as_rise(self):
+        when = datetime(2025, 1, 1, 13, 0, tzinfo=timezone.utc)
+        old_enforce = bot.ENFORCE_SESSION
+        try:
+            bot.ENFORCE_SESSION = False
+            sig = bot.analyze("Test", "TEST", sample_data(trend=0.001), when)
+        finally:
+            bot.ENFORCE_SESSION = old_enforce
+        self.assertEqual(sig.forecast_outlook, "RISE")
+        self.assertEqual(sig.horizon_hours, 3)
+        self.assertFalse(sig.confidence_is_probability)
+
+    def test_three_hour_outlook_labels_bearish_signal_as_fall(self):
+        when = datetime(2025, 1, 1, 13, 0, tzinfo=timezone.utc)
+        old_enforce = bot.ENFORCE_SESSION
+        try:
+            bot.ENFORCE_SESSION = False
+            sig = bot.analyze("Test", "TEST", sample_data(trend=-0.001), when)
+        finally:
+            bot.ENFORCE_SESSION = old_enforce
+        self.assertEqual(sig.forecast_outlook, "FALL")
+
     def test_features_are_generated(self):
         f = bot.features(sample_data())
         self.assertGreater(len(f), 100)
