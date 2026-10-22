@@ -31,6 +31,7 @@ jobs:
       - name: Run automated tests
         run: python -m unittest discover -s tests -v
       - name: Run on-demand market scan
+        if: github.event_name != 'pull_request'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'nii-gold-forex-bot' }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
