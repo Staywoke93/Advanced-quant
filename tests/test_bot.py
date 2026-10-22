@@ -208,17 +208,19 @@ class BotTests(unittest.TestCase):
         response = Mock()
         response.status_code = 200
         response.raise_for_status.return_value = None
-        with patch("bot.requests.post", return_value=response) as post, \
+        with patch("bot.NTFY_TOPIC", "test-topic"), \
+             patch("bot.requests.post", return_value=response) as post, \
              patch("bot.log.info") as info:
             sent = bot.send_ntfy("Test alert", "Test message")
         self.assertTrue(sent)
         post.assert_called_once()
-        self.assertIn("/" + bot.NTFY_TOPIC, post.call_args.args[0])
+        self.assertIn("/test-topic", post.call_args.args[0])
         info.assert_called()
 
     def test_ntfy_failure_returns_false(self):
         import requests
-        with patch("bot.requests.post", side_effect=requests.Timeout("timeout")), \
+        with patch("bot.NTFY_TOPIC", "test-topic"), \
+             patch("bot.requests.post", side_effect=requests.Timeout("timeout")), \
              patch("bot.time.sleep"):
             self.assertFalse(bot.send_ntfy("Test alert", "Test message"))
 
