@@ -5,12 +5,16 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # 30 minutes before Tokyo open (Sun-Thu UTC, to cover Mon-Fri Tokyo sessions).
-    - cron: "30 23 * * 0-4"
-    # 30 minutes before Frankfurt/London opens in either DST regime.
-    - cron: "30 6,7 * * 1-5"
-    # 30 minutes before New York open / London-New York overlap in either DST regime.
-    - cron: "30 11,12 * * 1-5"
+    # Session-open notifications and one-hour follow-up scans. Both UTC hour
+    # possibilities are listed to accommodate Europe/US daylight-saving changes.
+    # Tokyo: local 09:00 JST = 00:00 UTC; follow-up at 01:00 UTC.
+    - cron: "5 0,1 * * 0-4"
+    # Frankfurt/London: 07:00 UTC during summer time, 08:00 UTC during winter.
+    # 09:00 UTC also catches the one-hour follow-up after the winter open.
+    - cron: "5 7,8,9 * * 1-5"
+    # New York open / start of the London-Frankfurt-New York overlap.
+    # DST changes mean the relevant UTC hour varies across the year.
+    - cron: "5 12,13,14,15 * * 1-5"
 
 permissions:
   contents: read
