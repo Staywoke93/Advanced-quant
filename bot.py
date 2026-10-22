@@ -586,25 +586,29 @@ def main() -> int:
 
     if open_events:
         names = sorted({event["name"] for event in open_events})
-        message = [
-            f"Market session opened | {format_gmt(now.isoformat())}",
-            "Session(s): " + ", ".join(names),
-            "Times shown in GMT (UTC+0).",
-        ]
-        if any(event["mode"] == "overlap" for event in open_events):
-            # Evaluate historical volatility at the overlap opening; do not assume overlap always means high volatility.
-            overlap_result = scan(now)
-            high_vol = [s for s in overlap_result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
-            message.append(f"Historical-volatility check: {len(high_vol)} market(s) at least 1.5x their recent 24-hour ATR baseline.")
-            if high_vol:
-                message.append("HIGH VOLATILITY DETECTED:")
-                for s in sorted(high_vol, key=lambda item: item.get("volatility_ratio", 1), reverse=True)[:6]:
-                    message.append(f'{s["market"]}: {s["volatility_ratio"]:.2f}x recent ATR | {s["direction"]} ({s["status"]})')
-            else:
-                message.append("No unusual volatility threshold was met; overlap alone is not a trade signal.")
-        sent = send_ntfy("Market session opened", "\n".join(message))
+        is_overlap = any(event["mode"] == "overlap" for event in open_events)
+        if is_overlap:
+            title = "LONDON–NEW YORK MARKET OVERLAP"
+            message = [
+                f"⚡ LONDON–NEW YORK OVERLAP IS NOW OPEN | {format_gmt(now.isoformat())}",
+                "London and New York are both in their active trading sessions.",
+                "Frankfurt is also included in the overlap check where its session is active.",
+                "This is a session-timing alert, not a trade recommendation.",
+                "Times shown in GMT (UTC+0).",
+            ]
+        else:
+            title = "MARKET SESSION OPEN"
+            message = [
+                f"Market session opened | {format_gmt(now.isoformat())}",
+                "Session(s): " + ", ".join(names),
+                "Times shown in GMT (UTC+0).",
+                "Session alerts are sent regardless of whether any market has an actionable trade signal.",
+            ]
+        # Send the session event first and independently. Never wait for a market scan
+        # or let the absence of actionable signals suppress the session notification.
+        sent = send_ntfy(title, "\n".join(message))
         if not sent:
-            log.error("Could not send session-open notification.")
+            log.error("Could not send session notification: %s", title)
             return 2
 
     if scan_events:
