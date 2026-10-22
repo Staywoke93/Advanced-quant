@@ -49,6 +49,7 @@ jobs:
           SESSION_START_UTC: "00:00"
           SESSION_END_UTC: "00:00"
           ENFORCE_SESSION: "false"
+          FORCE_MARKET_SCAN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           RISK_PER_TRADE: "0.0025"
           DAILY_LOSS_LIMIT: "0.01"
           MAX_SIMULTANEOUS_SIGNALS: "2"
