@@ -1,0 +1,41 @@
+//@version=5
+indicator("Conservative 3-Hour Quant Signal (research)", overlay=true, max_labels_count=100)
+
+// This TradingView Pine indicator is for chart-based alerts, not automated orders.
+// Apply to a 1-hour chart. Signals are based on completed bars and should be validated.
+fastLen = input.int(9, "Fast EMA", minval=1)
+midLen = input.int(21, "Medium EMA", minval=1)
+slowLen = input.int(50, "Slow EMA", minval=2)
+rsiLen = input.int(14, "RSI length", minval=2)
+minRsiLong = input.float(50, "Minimum RSI for long")
+maxRsiLong = input.float(68, "Maximum RSI for long")
+minRsiShort = input.float(32, "Minimum RSI for short")
+maxRsiShort = input.float(50, "Maximum RSI for short")
+atrLen = input.int(14, "ATR length", minval=1)
+minAtrPct = input.float(0.03, "Minimum ATR %", minval=0.001) / 100
+maxAtrPct = input.float(2.5, "Maximum ATR %", minval=0.01) / 100
+sessionInput = input.session("1200-1500", "UTC session")
+requireSession = input.bool(true, "Require session")
+
+emaFast = ta.ema(close, fastLen)
+emaMid = ta.ema(close, midLen)
+emaSlow = ta.ema(close, slowLen)
+rsiValue = ta.rsi(close, rsiLen)
+atrPct = ta.atr(atrLen) / close
+inSession = not na(time(timeframe.period, sessionInput, "Etc/UTC"))
+sessionOk = not requireSession or inSession
+
+bull = emaFast > emaMid and emaMid > emaSlow and close > close[3] and rsiValue >= minRsiLong and rsiValue <= maxRsiLong
+bear = emaFast < emaMid and emaMid < emaSlow and close < close[3] and rsiValue >= minRsiShort and rsiValue <= maxRsiShort
+volOk = atrPct >= minAtrPct and atrPct <= maxAtrPct
+longSignal = barstate.isconfirmed and sessionOk and volOk and bull
+shortSignal = barstate.isconfirmed and sessionOk and volOk and bear
+
+plot(emaFast, "EMA 9", color=color.teal)
+plot(emaMid, "EMA 21", color=color.orange)
+plot(emaSlow, "EMA 50", color=color.purple)
+plotshape(longSignal, title="Long research signal", style=shape.labelup, text="LONG", location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white)
+plotshape(shortSignal, title="Short research signal", style=shape.labeldown, text="SHORT", location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white)
+
+alertcondition(longSignal, title="3H LONG research signal", message="3H research LONG signal on {{ticker}} at {{close}}. Not a trade instruction.")
+alertcondition(shortSignal, title="3H SHORT research signal", message="3H research SHORT signal on {{ticker}} at {{close}}. Not a trade instruction.")
