@@ -78,6 +78,32 @@ class BotTests(unittest.TestCase):
             bot.ENFORCE_SESSION = old_enforce
         self.assertEqual(sig.forecast_outlook, "FALL")
 
+    def test_outlook_displays_actionable_buy_explicitly(self):
+        line = bot.format_directional_outlook({
+            "market": "EUR/USD", "direction": "LONG", "forecast_outlook": "RISE",
+            "status": "SIGNAL", "last_price": 1.1, "confidence_score": 0.75,
+            "reasons": [],
+        })
+        self.assertIn("ACTION: BUY", line)
+        self.assertIn("3h outlook RISE", line)
+
+    def test_outlook_displays_sell_bias_and_filter_reason(self):
+        line = bot.format_directional_outlook({
+            "market": "BTC", "direction": "SHORT", "forecast_outlook": "FALL",
+            "status": "NO_TRADE", "last_price": 60000, "confidence_score": 0.58,
+            "reasons": ["directional score below threshold"],
+        })
+        self.assertIn("DIRECTIONAL BIAS: SELL (NOT ACTIONABLE)", line)
+        self.assertIn("directional score below threshold", line)
+
+    def test_outlook_waits_when_direction_is_uncertain(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "NO_TRADE", "forecast_outlook": "UNCERTAIN",
+            "status": "NO_TRADE", "last_price": 1.0, "confidence_score": 0.5,
+            "reasons": [],
+        })
+        self.assertIn("WAIT: no clear directional bias", line)
+
     def test_features_are_generated(self):
         f = bot.features(sample_data())
         self.assertGreater(len(f), 100)
