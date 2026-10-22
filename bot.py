@@ -67,6 +67,7 @@ class Signal:
     timestamp_utc: str
     last_price: float
     direction: str
+    forecast_outlook: str
     confidence_score: float
     confidence_is_probability: bool
     horizon_hours: int
@@ -396,6 +397,8 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
     if not math.isfinite(price) or price <= 0 or not math.isfinite(atr_pct):
         return None
     direction, confidence, reasons = score_row(row)
+    # Explicit three-hour directional outlook; this is not an exact future-price estimate.
+    forecast_outlook = "RISE" if direction == "LONG" else "FALL" if direction == "SHORT" else "UNCERTAIN"
     stop_pct = min(0.025, max(1.5 * atr_pct, 0.002))
     target_pct = 1.5 * stop_pct
     status = "SIGNAL"
@@ -416,7 +419,7 @@ def analyze(market: str, symbol: str, raw: pd.DataFrame,
     suggested_notional = min(ACCOUNT_EQUITY, risk_budget / stop_pct) if stop_pct > 0 else 0.0
     return Signal(
         market=market, symbol=symbol, timestamp_utc=now.isoformat(),
-        last_price=round(price, 8), direction=direction,
+        last_price=round(price, 8), direction=direction, forecast_outlook=forecast_outlook,
         confidence_score=round(confidence, 3), confidence_is_probability=False,
         horizon_hours=HORIZON_BARS, session_utc=f"{SESSION_START_UTC}-{SESSION_END_UTC}",
         atr_pct=round(atr_pct * 100, 3), volatility_ratio=round(volatility_ratio, 2),
@@ -562,6 +565,13 @@ def main() -> int:
             if len(result["failures"]) > 6:
                 lines.append(f'- Plus {len(result["failures"]) - 6} additional market failure(s); see the workflow artifact.')
             lines.append("")
+        # Directional outlook for every analysed market, including filtered/no-trade markets.
+        lines.append("\nTHREE-HOUR PRICE OUTLOOK (directional estimate, not guaranteed):")
+        for s in result.get("signals", []):
+            outlook = s.get("forecast_outlook", "UNCERTAIN")
+            lines.append("- {}: {} over next {}h | current {} | status {} | heuristic score {:.0%}".format(s["market"], outlook, HORIZON_BARS, s["last_price"], s["status"], s["confidence_score"]))
+        lines.append("Based on EMA trend, recent momentum and RSI from historical hourly candles; score is not a probability.")
+        lines.append("")
         high_vol = [s for s in result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
         if high_vol:
             lines.append("Unusually high volatility vs recent ATR baseline:")
