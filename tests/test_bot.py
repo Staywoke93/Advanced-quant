@@ -37,14 +37,17 @@ class BotTests(unittest.TestCase):
         sig = bot.analyze("Test", "TEST", sample_data(), when)
         self.assertEqual(sig.status, "OUTSIDE_SESSION")
 
-    def test_scan_outside_session_reports_skipped_not_data_failure(self):
-        when = datetime(2025, 1, 1, 16, 0, tzinfo=timezone.utc)
-        def should_not_fetch(symbol):
-            self.fail("fetcher must not run outside the configured session")
-        result = bot.scan(now=when, fetcher=should_not_fetch)
-        self.assertEqual(result["status"], "OUTSIDE_SESSION")
+    def test_scan_can_analyse_before_configured_session(self):
+        when = datetime(2025, 1, 1, 6, 30, tzinfo=timezone.utc)
+        old_enforce = bot.ENFORCE_SESSION
+        try:
+            bot.ENFORCE_SESSION = False
+            result = bot.scan(now=when, fetcher=lambda symbol: sample_data())
+        finally:
+            bot.ENFORCE_SESSION = old_enforce
         self.assertEqual(result["markets_requested"], len(bot.MARKETS))
-        self.assertEqual(result["markets_analyzed"], 0)
+        self.assertEqual(result["markets_analyzed"], len(bot.MARKETS))
+        self.assertTrue(result["session_windows"])
 
     def test_upcoming_session_window_is_gmt_and_three_hours(self):
         now = datetime(2025, 1, 6, 6, 30, tzinfo=timezone.utc)
