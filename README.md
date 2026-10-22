@@ -35,7 +35,7 @@ GitHub Actions is not a real-time trading server; runs can be delayed. It does n
 - Target estimate: 1.5× stop distance.
 - Suggested notional is capped at assumed equity.
 
-The score is a rule-based ranking heuristic, **not a calibrated win probability**. Sizing is approximate and ignores contract/tick value, account-currency conversion, leverage, margin, spreads, fees, slippage, financing, funding and broker-specific constraints. The `DAILY_LOSS_LIMIT` is documented but not enforced from broker account data.
+Each scan now explicitly labels a **three-hour directional outlook** as RISE, FALL, or UNCERTAIN for every successfully analysed market, including markets filtered out from actionable signals. It is derived from the existing EMA trend, recent momentum and RSI rules; it is a directional estimate, not a predicted exact future price or a calibrated probability. The score is a rule-based ranking heuristic, **not a calibrated win probability**. Sizing is approximate and ignores contract/tick value, account-currency conversion, leverage, margin, spreads, fees, slippage, financing, funding and broker-specific constraints. The `DAILY_LOSS_LIMIT` is documented but not enforced from broker account data.
 
 ## Set up locally
 
