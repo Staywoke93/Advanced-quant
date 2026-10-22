@@ -53,7 +53,7 @@ DATA_INTERVAL = os.getenv("DATA_INTERVAL", "1h")
 DATA_PERIOD = os.getenv("DATA_PERIOD", "730d")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "nii-gold-forex-bot").strip()
-NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+NTFY_SERVER = (os.getenv("NTFY_SERVER") or "https://ntfy.sh").strip().rstrip("/")
 NTFY_TOKEN = os.getenv("NTFY_TOKEN", "").strip()
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "12"))
 
