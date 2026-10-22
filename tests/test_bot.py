@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
 import numpy as np
@@ -85,6 +86,24 @@ class BotTests(unittest.TestCase):
         now = datetime(2025, 1, 6, 13, 5, tzinfo=timezone.utc)
         events = bot.session_events(now)
         self.assertTrue(any(e["mode"] == "overlap" for e in events))
+
+    def test_ntfy_success_is_reported_and_returns_true(self):
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        with patch("bot.requests.post", return_value=response) as post, \
+             patch("bot.log.info") as info:
+            sent = bot.send_ntfy("Test alert", "Test message")
+        self.assertTrue(sent)
+        post.assert_called_once()
+        self.assertIn("/" + bot.NTFY_TOPIC, post.call_args.args[0])
+        info.assert_called()
+
+    def test_ntfy_failure_returns_false(self):
+        import requests
+        with patch("bot.requests.post", side_effect=requests.Timeout("timeout")), \
+             patch("bot.time.sleep"):
+            self.assertFalse(bot.send_ntfy("Test alert", "Test message"))
 
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE
