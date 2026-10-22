@@ -397,8 +397,9 @@ def send_ntfy(title: str, message: str) -> bool:
             r = requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=message.encode(),
                               headers=headers, timeout=REQUEST_TIMEOUT)
             r.raise_for_status()
-            if attempt > 1:
-                log.info("ntfy notification delivered after retry %d", attempt - 1)
+            log.info("ntfy accepted notification (HTTP %s)%s",
+                     r.status_code,
+                     f" after retry {attempt - 1}" if attempt > 1 else "")
             return True
         except requests.RequestException as exc:
             log.error("ntfy notification attempt %d/3 failed: %s", attempt, exc)
