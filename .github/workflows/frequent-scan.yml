@@ -2,9 +2,10 @@ name: Advanced quant frequent scan
 
 on:
   schedule:
-    # Additional scans, deliberately outside the existing session-alert cron hours.
-    # These run independently so the existing session-open and follow-up alerts remain unchanged.
-    - cron: "5 2,5,11,17,20,23 * * 1-5"
+    # Hourly monitoring scans at :20 UTC, excluding all existing session-alert UTC hours
+    # (00, 01, 07, 08, 09, 12, 13, 14, 15) to avoid colliding with those alerts.
+    # The core bot's signal horizon remains 3 hours; this workflow does not change that logic.
+    - cron: "20 2-6,10-11,16-23 * * 1-5"
   workflow_dispatch:
 
 permissions:
