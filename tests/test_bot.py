@@ -37,6 +37,15 @@ class BotTests(unittest.TestCase):
         sig = bot.analyze("Test", "TEST", sample_data(), when)
         self.assertEqual(sig.status, "OUTSIDE_SESSION")
 
+    def test_scan_outside_session_reports_skipped_not_data_failure(self):
+        when = datetime(2025, 1, 1, 16, 0, tzinfo=timezone.utc)
+        def should_not_fetch(symbol):
+            self.fail("fetcher must not run outside the configured session")
+        result = bot.scan(now=when, fetcher=should_not_fetch)
+        self.assertEqual(result["status"], "OUTSIDE_SESSION")
+        self.assertEqual(result["markets_requested"], len(bot.MARKETS))
+        self.assertEqual(result["markets_analyzed"], 0)
+
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE
         try:
