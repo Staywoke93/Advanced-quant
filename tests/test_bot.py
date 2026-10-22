@@ -32,6 +32,30 @@ class BotTests(unittest.TestCase):
         result = validate_ohlc(data)
         self.assertTrue(any("high below" in error for error in result["errors"]))
 
+    def test_stale_crypto_data_is_rejected(self):
+        now = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+        old_index = pd.date_range(end=now - pd.Timedelta(hours=5), periods=150,
+                                  freq="h", tz="UTC")
+        self.assertIn("stale hourly data", bot.market_data_staleness_reason("BTC-USD", old_index, now))
+
+    def test_fresh_crypto_data_is_accepted(self):
+        now = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+        fresh_index = pd.date_range(end=now - pd.Timedelta(hours=1), periods=150,
+                                    freq="h", tz="UTC")
+        self.assertIsNone(bot.market_data_staleness_reason("BTC-USD", fresh_index, now))
+
+    def test_fx_weekend_gap_is_allowed(self):
+        now = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)  # Sunday before FX open
+        old_index = pd.date_range(end=now - pd.Timedelta(hours=48), periods=150,
+                                  freq="h", tz="UTC")
+        self.assertIsNone(bot.market_data_staleness_reason("EURUSD=X", old_index, now))
+
+    def test_future_market_timestamp_is_rejected(self):
+        now = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+        future_index = pd.date_range(end=now + pd.Timedelta(hours=1), periods=150,
+                                     freq="h", tz="UTC")
+        self.assertIn("in the future", bot.market_data_staleness_reason("BTC-USD", future_index, now))
+
     def test_features_are_generated(self):
         f = bot.features(sample_data())
         self.assertGreater(len(f), 100)
