@@ -29,7 +29,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run automated tests
         run: python -m unittest discover -s tests -v
+      # Pushes run tests only; avoid misleading out-of-session push notifications.
       - name: Run scan
+        if: github.event_name != 'push'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'nii-gold-forex-bot' }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
