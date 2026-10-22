@@ -3,6 +3,8 @@ name: Advanced three-hour quant scan
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     # Session-open notifications and one-hour follow-up scans. Both UTC hour
@@ -37,9 +39,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run automated tests
         run: python -m unittest discover -s tests -v
-      # Pushes run tests only; avoid misleading out-of-session push notifications.
+      # Pushes and pull requests run tests only; avoid unintended notifications.
       - name: Run scan
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'pull_request'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'nii-gold-forex-bot' }}
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}

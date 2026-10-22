@@ -12,12 +12,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from bot import features, score_row, MIN_CONFIDENCE
+from market_data import validate_ohlc
 
 
 def backtest_frame(df: pd.DataFrame, horizon: int = 3, fee_bps: float = 2.0,
                    confidence_threshold: float = MIN_CONFIDENCE) -> dict:
     if horizon < 1:
         raise ValueError("horizon must be >= 1")
+    validation = validate_ohlc(df)
+    if validation["errors"]:
+        raise ValueError("Invalid OHLC data: " + "; ".join(validation["errors"]))
     f = features(df)
     if len(f) <= horizon:
         return {"trades": 0, "win_rate": None, "total_return_pct": 0.0,
@@ -54,6 +58,7 @@ def backtest_frame(df: pd.DataFrame, horizon: int = 3, fee_bps: float = 2.0,
         "profit_factor": round(float(gains / losses), 4) if losses > 0 else None,
         "fee_assumption_bps_per_side": fee_bps,
         "horizon_bars": horizon,
+        "validation_warnings": validation["warnings"],
         "warning": "Overlapping trades; close-to-close exits; no intrabar stop/target simulation. Not evidence of future profitability."
     }
 
@@ -65,6 +70,8 @@ def main():
     parser.add_argument("--interval", default="1h")
     parser.add_argument("--horizon", type=int, default=3)
     parser.add_argument("--fee-bps", type=float, default=2.0)
+    parser.add_argument("--split", type=float, default=0.70,
+                        help="chronological in-sample fraction; remaining data is held out")
     parser.add_argument("--output", default="output/backtest.json")
     args = parser.parse_args()
     import yfinance as yf
@@ -76,11 +83,29 @@ def main():
         df.columns = [c[0] for c in df.columns]
     df.columns = [str(c).lower().replace(" ", "_") for c in df.columns]
     df = df[["open", "high", "low", "close"]].dropna()
-    result = backtest_frame(df, horizon=args.horizon, fee_bps=args.fee_bps)
+    if not 0.50 <= args.split <= 0.90:
+        raise SystemExit("--split must be between 0.50 and 0.90")
+    split_at = int(len(df) * args.split)
+    if split_at <= 120 or len(df) - split_at <= args.horizon + 50:
+        raise SystemExit("Not enough bars for the requested chronological split")
+    train_result = backtest_frame(df.iloc[:split_at].copy(), horizon=args.horizon,
+                                  fee_bps=args.fee_bps)
+    test_result = backtest_frame(df.iloc[split_at:].copy(), horizon=args.horizon,
+                                 fee_bps=args.fee_bps)
+    result = {
+        "symbol": args.symbol,
+        "split_fraction_in_sample": args.split,
+        "bars_total": len(df),
+        "bars_in_sample": split_at,
+        "bars_held_out": len(df) - split_at,
+        "in_sample": train_result,
+        "held_out": test_result,
+        "warning": "Held-out results are historical diagnostics, not a guarantee. This fixed-rule split does not replace rolling walk-forward tests or realistic intrabar stop/target simulation."
+    }
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"symbol": args.symbol, **result}, indent=2))
-    print(json.dumps({"symbol": args.symbol, **result}, indent=2))
+    path.write_text(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

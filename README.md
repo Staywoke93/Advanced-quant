@@ -54,13 +54,15 @@ python bot.py
 
 Set environment variables from `.env.example` in your shell. The script intentionally does not load `.env` automatically. For a local scan outside the configured session, set `ENFORCE_SESSION=false`.
 
-Run a backtest (requires internet access for Yahoo Finance):
+Run a chronological in-sample / held-out backtest (requires internet access for Yahoo Finance):
 
 ```bash
-python backtest.py --symbol EURUSD=X --period 730d --interval 1h --horizon 3 --fee-bps 2
+python backtest.py --symbol EURUSD=X --period 730d --interval 1h --horizon 3 --fee-bps 2 --split 0.70
 ```
 
-Backtest results are diagnostics only. Trades may overlap; exits are close-to-close and don't model intrabar stop/target ordering. Results do not prove future profitability. Perform out-of-sample and walk-forward validation and include realistic spread, fees, slippage and market-specific data before considering live use.
+The report separates the earlier in-sample segment from the later held-out segment in chronological order. This is a basic holdout check, not a trained-model validation or full rolling walk-forward evaluation. Backtest results are diagnostics only. Trades may overlap; exits are close-to-close and do not model intrabar stop/target ordering, realistic spread by market, slippage, swaps/funding, or broker execution. Results do not prove future profitability. Do not treat the score as a probability or promote a signal as 85–93% accurate unless repeated out-of-sample testing with adequate sample size supports that result.
+
+The scanner and backtester now run structural OHLC checks for missing/non-numeric/non-finite or non-positive prices, impossible candle highs/lows, duplicate/non-chronological timestamps, large close-to-close jumps, and suspicious timestamp gaps. Gaps and large jumps are warnings because market closures and real volatility can explain them. These checks cannot confirm that provider prices are correct or current; instrument-aware freshness validation and broker-feed reconciliation remain future work.
 
 ## ntfy setup
 
