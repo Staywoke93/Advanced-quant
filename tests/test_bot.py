@@ -58,6 +58,23 @@ class BotTests(unittest.TestCase):
         end = datetime.fromisoformat(windows[0]["suggested_entry_end_gmt"])
         self.assertEqual((end - start).total_seconds(), 3 * 3600)
 
+    def test_session_open_alert_detection(self):
+        # Winter London/Frankfurt open is 08:00 GMT.
+        now = datetime(2025, 1, 6, 8, 5, tzinfo=timezone.utc)
+        events = bot.session_events(now)
+        self.assertTrue(any(e["mode"] == "open" and e["name"] in ("London", "Frankfurt") for e in events))
+
+    def test_one_hour_followup_detection(self):
+        now = datetime(2025, 1, 6, 9, 5, tzinfo=timezone.utc)
+        events = bot.session_events(now)
+        self.assertTrue(any(e["mode"] == "scan" and e["name"] in ("London", "Frankfurt") for e in events))
+
+    def test_three_market_overlap_detection(self):
+        # At 13:05 GMT in winter, London and Frankfurt are open and New York has just opened.
+        now = datetime(2025, 1, 6, 13, 5, tzinfo=timezone.utc)
+        events = bot.session_events(now)
+        self.assertTrue(any(e["mode"] == "overlap" for e in events))
+
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE
         try:
