@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -203,6 +204,61 @@ class BotTests(unittest.TestCase):
         now = datetime(2025, 1, 6, 13, 5, tzinfo=timezone.utc)
         events = bot.session_events(now)
         self.assertTrue(any(e["mode"] == "overlap" for e in events))
+
+    def test_every_session_open_is_detected_in_winter_and_summer(self):
+        # Test each configured local opening, converted with its real IANA timezone.
+        for date in ((2025, 1, 6), (2025, 7, 7)):
+            for definition in bot.SESSION_DEFINITIONS:
+                with self.subTest(season=date, session=definition["name"]):
+                    zone = ZoneInfo(definition["timezone"])
+                    local_open = datetime(*date, definition["open_hour"],
+                                          definition["open_minute"], tzinfo=zone)
+                    now = local_open.astimezone(timezone.utc) + pd.Timedelta(minutes=5)
+                    events = bot.session_events(now.to_pydatetime() if hasattr(now, "to_pydatetime") else now)
+                    self.assertTrue(any(
+                        e["mode"] == "open" and e["name"] == definition["name"]
+                        for e in events
+                    ), f"Missing {definition['name']} open at {now}")
+
+    def test_london_new_york_overlap_is_detected_across_dst_transitions(self):
+        # These dates cover US DST before Europe changes, both on DST, and both on standard time.
+        dates = [
+            datetime(2025, 3, 10, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2025, 3, 31, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2025, 11, 3, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+        ]
+        for local_ny_open in dates:
+            with self.subTest(local_date=local_ny_open.date()):
+                events = bot.session_events(local_ny_open.astimezone(timezone.utc))
+                self.assertTrue(any(
+                    e["mode"] == "overlap" and "London" in e["name"] and "New York" in e["name"]
+                    for e in events
+                ))
+
+    def test_overlap_notification_has_own_title_and_does_not_require_scan(self):
+        now = datetime(2025, 1, 6, 13, 5, tzinfo=timezone.utc)
+        with patch("bot.validate_config"), patch("bot.utc_now", return_value=now), \
+             patch("bot.session_events", return_value=[
+                 {"mode": "open", "name": "New York", "open_gmt": now.isoformat(), "age_minutes": 5},
+                 {"mode": "overlap", "name": "London–Frankfurt–New York overlap",
+                  "open_gmt": now.isoformat(), "age_minutes": 0},
+             ]), patch("bot.send_ntfy", return_value=True) as send, \
+             patch("bot.scan") as market_scan:
+            self.assertEqual(bot.main(), 0)
+        self.assertEqual(send.call_args.args[0], "LONDON–NEW YORK MARKET OVERLAP")
+        self.assertIn("OVERLAP IS NOW OPEN", send.call_args.args[1])
+        market_scan.assert_not_called()
+
+    def test_session_open_notification_is_sent_even_without_actionable_signals(self):
+        now = datetime(2025, 1, 6, 8, 5, tzinfo=timezone.utc)
+        with patch("bot.validate_config"), patch("bot.utc_now", return_value=now), \
+             patch("bot.session_events", return_value=[
+                 {"mode": "open", "name": "London", "open_gmt": now.isoformat(), "age_minutes": 5}
+             ]), patch("bot.send_ntfy", return_value=True) as send, \
+             patch("bot.scan") as market_scan:
+            self.assertEqual(bot.main(), 0)
+        self.assertEqual(send.call_args.args[0], "MARKET SESSION OPEN")
+        market_scan.assert_not_called()
 
     def test_ntfy_success_is_reported_and_returns_true(self):
         response = Mock()
