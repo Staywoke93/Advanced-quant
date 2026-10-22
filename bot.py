@@ -54,7 +54,7 @@ ENFORCE_SESSION = os.getenv("ENFORCE_SESSION", "true").lower() == "true"
 DATA_INTERVAL = os.getenv("DATA_INTERVAL", "1h")
 DATA_PERIOD = os.getenv("DATA_PERIOD", "730d")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "nii-gold-forex-bot").strip()
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
 NTFY_SERVER = (os.getenv("NTFY_SERVER") or "https://ntfy.sh").strip().rstrip("/")
 NTFY_TOKEN = os.getenv("NTFY_TOKEN", "").strip()
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -336,8 +336,10 @@ def score_row(row: pd.Series) -> tuple[str, float, list[str]]:
         reasons.append("3-bar momentum negative")
     if row["ret_6"] > 0:
         score += min(0.12, abs(float(row["ret_6"])) * 10)
+        reasons.append("6-bar momentum positive")
     elif row["ret_6"] < 0:
         score -= min(0.12, abs(float(row["ret_6"])) * 10)
+        reasons.append("6-bar momentum negative")
     rv = float(row["rsi"])
     if 50 <= rv <= 68:
         score += 0.12
@@ -351,6 +353,8 @@ def score_row(row: pd.Series) -> tuple[str, float, list[str]]:
     elif rv <= 25:
         score += 0.06
         reasons.append(f"oversold caution ({rv:.1f})")
+    else:
+        reasons.append(f"RSI neutral ({rv:.1f})")
     direction = "LONG" if score > 0 else "SHORT" if score < 0 else "NO_TRADE"
     confidence = min(0.90, 0.50 + abs(score) * 0.70)
     return direction, confidence, reasons
@@ -377,6 +381,12 @@ def validate_config() -> None:
         raise ValueError("DAILY_LOSS_LIMIT must be in (0, 3%]")
     if not 0.50 <= MIN_CONFIDENCE <= 0.90:
         raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.90")
+    if MAX_SIMULTANEOUS_SIGNALS < 0:
+        raise ValueError("MAX_SIMULTANEOUS_SIGNALS must be zero or greater")
+    if not 0 < MIN_ATR_PCT < MAX_ATR_PCT:
+        raise ValueError("ATR safety band must satisfy 0 < MIN_ATR_PCT < MAX_ATR_PCT")
+    if REQUEST_TIMEOUT < 1:
+        raise ValueError("REQUEST_TIMEOUT must be at least one second")
     if HORIZON_BARS < 1:
         raise ValueError("HORIZON_BARS must be at least 1")
     # Validate clock strings.
@@ -446,12 +456,20 @@ def format_directional_outlook(signal: dict) -> str:
         reasons = [str(reasons)] if reasons else []
     reason_text = "; ".join(str(reason) for reason in reasons) if reasons else "no indicator reasons supplied"
 
-    # If directional evidence explicitly conflicts, don't manufacture a strong call.
+    # Treat disagreements among trend, momentum and RSI as WAIT.
+    # A high aggregate score must not hide a conflicting indicator.
     reason_lower = " ".join(str(reason).lower() for reason in reasons)
+    bullish_trend = "ema trend alignment bullish" in reason_lower
+    bearish_trend = "ema trend alignment bearish" in reason_lower
+    positive_momentum = "momentum positive" in reason_lower
+    negative_momentum = "momentum negative" in reason_lower
+    bullish_rsi = "rsi supportive" in reason_lower or "oversold caution" in reason_lower
+    bearish_rsi = "rsi supports bearish momentum" in reason_lower or "overbought caution" in reason_lower
     conflict = (
-        ("ema trend alignment bullish" in reason_lower and "momentum negative" in reason_lower)
-        or ("ema trend alignment bearish" in reason_lower and "momentum positive" in reason_lower)
-        or ("bullish" in reason_lower and "bearish" in reason_lower)
+        (bullish_trend and (negative_momentum or bearish_rsi))
+        or (bearish_trend and (positive_momentum or bullish_rsi))
+        or (positive_momentum and negative_momentum)
+        or (bullish_rsi and bearish_rsi)
     )
     if side == "WAIT" or conflict or outlook == "UNCERTAIN":
         call = "WAIT — mixed/uncertain indicators"
