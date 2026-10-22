@@ -104,6 +104,28 @@ class BotTests(unittest.TestCase):
         })
         self.assertIn("WAIT: no clear directional bias", line)
 
+    def test_outlook_handles_missing_or_invalid_optional_fields(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "SHORT", "status": "NO_TRADE",
+            "confidence_score": None, "reasons": "low confidence",
+        })
+        self.assertIn("DIRECTIONAL BIAS: SELL (NOT ACTIONABLE)", line)
+        self.assertIn("heuristic score 0%", line)
+        self.assertIn("low confidence", line)
+
+    def test_scan_continues_when_one_market_fetch_raises(self):
+        when = datetime(2025, 1, 1, 13, 0, tzinfo=timezone.utc)
+        calls = {"count": 0}
+        def flaky_fetcher(symbol):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("provider timeout")
+            return sample_data()
+        result = bot.scan(now=when, fetcher=flaky_fetcher)
+        self.assertEqual(result["markets_requested"], len(bot.MARKETS))
+        self.assertEqual(result["markets_analyzed"], len(bot.MARKETS) - 1)
+        self.assertTrue(any("data fetch failed: provider timeout" in f["reason"] for f in result["failures"]))
+
     def test_features_are_generated(self):
         f = bot.features(sample_data())
         self.assertGreater(len(f), 100)
