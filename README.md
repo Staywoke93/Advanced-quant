@@ -14,11 +14,15 @@ Conservative **signals-only** research system for FX, a gold futures proxy, and 
 
 Yahoo symbols are data-provider symbols and may not match your broker's symbol names. Gold uses a futures proxy, not spot XAU/USD. Data availability/latency varies by instrument and interval.
 
-## The session
+## Session-open and overlap scans
 
-Default session is **12:00–15:00 UTC**, equivalent to 12:00–15:00 in Ghana. It is a single three-hour analysis session on weekdays. Crypto trades 24/7, while FX and gold have different liquidity windows; you may want to adjust the session for your broker and preferred market overlap.
+The workflow schedules scans approximately 30 minutes before Tokyo, Frankfurt/London, and New York opens, including the London–New York overlap. The scanner uses IANA time zones (Asia/Tokyo, Europe/Berlin, Europe/London, America/New_York) to calculate the next relevant opening and show suggested entry-window times in **GMT/UTC**, with daylight-saving changes accounted for.
 
-A scheduled GitHub workflow launches a scan at 12:00 UTC. GitHub Actions is not a real-time trading server; runs can be delayed. It does not watch an open position, enforce a live daily loss limit against broker equity, or close a position at the three-hour mark.
+Typical reference hours are Tokyo 00:00–09:00 UTC year-round, Frankfurt around 07:00–16:00 UTC in European summer / 08:00–17:00 in winter, London around 07:00–16:00 UTC in summer / 08:00–17:00 in winter, and New York around 12:00–21:00 UTC in US summer / 13:00–22:00 in winter. Exact UTC hours can differ during the weeks when the US and Europe change clocks on different dates.
+
+Each alert includes the upcoming session, opening time, and a suggested three-hour window from the opening. This is a planning window, not an instruction to enter blindly; confirm current prices, spread, volatility, news, and the latest completed candle. The hourly data source may delay or revise candles.
+
+GitHub Actions is not a real-time trading server; runs can be delayed. It does not watch an open position, enforce a live daily loss limit against broker equity, or close a position at the three-hour mark.
 
 ## Risk controls in this version
 
@@ -73,7 +77,7 @@ Backtest results are diagnostics only. Trades may overlap; exits are close-to-cl
 4. Run **Actions → Advanced three-hour quant scan → Run workflow**.
 5. Review the logs and download the JSON artifact.
 
-The scheduled workflow runs Monday-Friday at 12:00 UTC. Scheduled workflows can be delayed or disabled for inactive public repositories. Use workflow dispatch for a manual test.
+The scheduled workflow runs at multiple pre-open times through the weekday and at 23:30 UTC Sunday-Thursday for the next Tokyo session. Scheduled workflows can be delayed or disabled for inactive public repositories. Use workflow dispatch for a manual test.
 
 ## TradingView setup
 
