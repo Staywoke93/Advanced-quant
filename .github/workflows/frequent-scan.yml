@@ -2,9 +2,9 @@ name: Advanced quant frequent scan
 
 on:
   schedule:
-    # Hourly monitoring scans at :20 UTC every day, excluding existing session-alert UTC hours
-    # (00, 01, 07, 08, 09, 12, 13, 14, 15) to avoid colliding with those alerts.
-    # The core bot's signal horizon remains 3 hours; this workflow does not change that logic.
+    # Run a full market scan every hour at minute 20 UTC.
+    # Session-open notifications remain handled by daily-scan.yml.
+    # The core bot's signal horizon remains 3 hours; scan frequency does not change it.
     - cron: "20 * * * *"
   workflow_dispatch:
 
