@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+from market_data import validate_ohlc
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -229,8 +230,11 @@ def fetch_history(symbol: str, period: str = DATA_PERIOD, interval: str = DATA_I
             df = df.apply(pd.to_numeric, errors="coerce").dropna()
             if len(df) < 120:
                 raise ValueError(f"not enough bars ({len(df)})")
-            if (df[["open", "high", "low", "close"]] <= 0).any().any():
-                raise ValueError("non-positive OHLC values")
+            validation = validate_ohlc(df)
+            if validation["errors"]:
+                raise ValueError("; ".join(validation["errors"]))
+            if validation["warnings"]:
+                log.warning("%s data validation warnings: %s", symbol, "; ".join(validation["warnings"]))
             return df
         except Exception as exc:
             wait = 2 ** attempt + random.random()
