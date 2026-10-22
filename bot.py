@@ -438,16 +438,24 @@ def main() -> int:
     now = utc_now()
     events = session_events(now)
     if not events:
-        log.info("No session-open or one-hour follow-up event at %s; no notification sent.", format_gmt(now.isoformat()))
-        # Record why this run did not scan, so workflow_dispatch produces a useful artifact.
+        timestamp = format_gmt(now.isoformat())
+        log.info("No session-open or one-hour follow-up event at %s; sending bot-alive test notification.", timestamp)
+        # Manual runs outside a session should still prove that ntfy is configured and reachable.
+        sent = send_ntfy(
+            "Advanced Quant bot is running",
+            f"Bot health check successful | {timestamp} GMT\n"
+            "The workflow started and ntfy delivery succeeded. No market scan was run because this time is outside a configured session-open/follow-up window. "
+            "To test signal generation, run during a scheduled session window."
+        )
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         path = OUTPUT_DIR / f"scan-skipped-{now.date().isoformat()}-{now:%H%M}.json"
         path.write_text(json.dumps({
-            "timestamp_gmt": format_gmt(now.isoformat()),
+            "timestamp_gmt": timestamp,
             "status": "skipped_no_scheduled_session_event",
-            "message": "This run was outside the session-open and one-hour follow-up windows. No market scan or trading signal was generated."
+            "ntfy_health_notification_sent": sent,
+            "message": "This run was outside the session-open and one-hour follow-up windows. A bot-alive notification was attempted; no market scan or trading signal was generated."
         }, indent=2), encoding="utf-8")
-        return 0
+        return 0 if sent else 2
 
     open_events = [event for event in events if event["mode"] in ("open", "overlap")]
     scan_events = [event for event in events if event["mode"] == "scan"]
