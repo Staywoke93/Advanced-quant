@@ -9,7 +9,8 @@ import os
 import random
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
 
@@ -81,6 +82,74 @@ class Signal:
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+
+SESSION_DEFINITIONS = [
+    {"name": "Tokyo", "timezone": "Asia/Tokyo", "open_hour": 9, "open_minute": 0},
+    {"name": "Frankfurt", "timezone": "Europe/Berlin", "open_hour": 9, "open_minute": 0},
+    {"name": "London", "timezone": "Europe/London", "open_hour": 8, "open_minute": 0},
+    {"name": "New York", "timezone": "America/New_York", "open_hour": 8, "open_minute": 0},
+]
+
+
+def upcoming_session_windows(now: datetime, horizon_hours: int = HORIZON_BARS) -> list[dict]:
+    """Return the next session opening(s) and suggested GMT entry windows, DST-aware."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    events = []
+    for definition in SESSION_DEFINITIONS:
+        zone = ZoneInfo(definition["timezone"])
+        for offset in (0, 1):
+            local_day = (now + timedelta(days=offset)).astimezone(zone).date()
+            if local_day.weekday() >= 5:
+                continue
+            local_open = datetime(
+                local_day.year, local_day.month, local_day.day,
+                definition["open_hour"], definition["open_minute"], tzinfo=zone
+            )
+            open_utc = local_open.astimezone(timezone.utc)
+            minutes_until = (open_utc - now).total_seconds() / 60
+            if 0 <= minutes_until <= 90:
+                events.append({
+                    "name": definition["name"],
+                    "open_utc": open_utc,
+                    "minutes_until": minutes_until,
+                })
+    events.sort(key=lambda item: item["open_utc"])
+    if not events:
+        return []
+    earliest = events[0]["open_utc"]
+    simultaneous = [event for event in events if event["open_utc"] == earliest]
+    names = {event["name"] for event in simultaneous}
+    if "New York" in names and any(
+        definition["name"] == "London" and
+        datetime(
+            earliest.astimezone(ZoneInfo("Europe/London")).year,
+            earliest.astimezone(ZoneInfo("Europe/London")).month,
+            earliest.astimezone(ZoneInfo("Europe/London")).day,
+            8, 0, tzinfo=ZoneInfo("Europe/London")
+        ).astimezone(timezone.utc) < earliest
+        for definition in SESSION_DEFINITIONS
+    ):
+        event_name = "London–New York overlap"
+    elif len(names) > 1:
+        event_name = " + ".join(sorted(names)) + " opens"
+    else:
+        event_name = next(iter(names))
+    open_utc = earliest
+    return [{
+        "event": event_name,
+        "session_open_gmt": open_utc.isoformat(),
+        "suggested_entry_start_gmt": open_utc.isoformat(),
+        "suggested_entry_end_gmt": (open_utc + timedelta(hours=horizon_hours)).isoformat(),
+        "minutes_until_open": max(0, round((open_utc - now).total_seconds() / 60)),
+    }]
+
+
+def format_gmt(iso_value: str) -> str:
+    value = datetime.fromisoformat(iso_value).astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%d %H:%M GMT")
 
 def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
@@ -275,16 +344,7 @@ def send_ntfy(title: str, message: str) -> bool:
 
 def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
     now = now or utc_now()
-    if ENFORCE_SESSION and not in_session(now):
-        return {
-            "generated_at_utc": now.isoformat(),
-            "status": "OUTSIDE_SESSION",
-            "session_utc": f"{SESSION_START_UTC}-{SESSION_END_UTC}",
-            "markets_requested": len(MARKETS),
-            "markets_analyzed": 0,
-            "failures": [],
-            "signals": [],
-        }
+    # Session-open scans are intentionally allowed before the old fixed session.
     results, failures = [], []
     for market, symbol in MARKETS.items():
         raw = fetcher(symbol)
@@ -303,10 +363,12 @@ def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
     for s in eligible[MAX_SIMULTANEOUS_SIGNALS:]:
         s["status"] = "NO_TRADE"
         s["reasons"].append("concurrent-signal cap reached")
+    windows = upcoming_session_windows(now)
     return {
         "generated_at_utc": now.isoformat(),
-        "session_utc": f"{SESSION_START_UTC}-{SESSION_END_UTC}",
+        "timezone": "GMT (UTC+0)",
         "horizon_hours": HORIZON_BARS,
+        "session_windows": windows,
         "markets_requested": len(MARKETS),
         "markets_analyzed": len(results),
         "failures": failures,
@@ -324,19 +386,26 @@ def main() -> int:
     path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     actionable = [s for s in result.get("signals", []) if s["status"] == "SIGNAL"]
     lines = [
-        f"Advanced 3-hour quant scan | {now:%Y-%m-%d %H:%M UTC}",
-        f"Session: {SESSION_START_UTC}-{SESSION_END_UTC} UTC | horizon: {HORIZON_BARS} hourly bars",
+        f"Advanced quant session scan | {now:%Y-%m-%d %H:%M GMT}",
+        f"Horizon: {HORIZON_BARS} hourly bars | risk budget: {RISK_PER_TRADE:.2%} per signal",
         f"Markets analysed: {result.get('markets_analyzed', 0)}/{len(MARKETS)}",
         "Research alerts only. Confidence is NOT a win probability. No orders are placed.",
         ""
     ]
-    if result.get("status") == "OUTSIDE_SESSION":
+    windows = result.get("session_windows", [])
+    if windows:
+        window = windows[0]
+        lines.append(f"Upcoming session: {window['event']}")
+        lines.append(f"Session opens: {format_gmt(window['session_open_gmt'])}")
         lines.append(
-            "SCAN SKIPPED: current time is outside the configured session. "
-            "No market data was fetched; 0/12 markets analysed is expected. "
-            "This is not a no-signal result."
+            f"Suggested entry window: {format_gmt(window['suggested_entry_start_gmt'])} "
+            f"to {format_gmt(window['suggested_entry_end_gmt'])}"
         )
-    elif actionable:
+        lines.append("Entry window is a planning guide, not a guarantee; reassess the live price before entering.")
+    else:
+        lines.append("No major session open is within the next 90 minutes.")
+    lines.append("")
+    if actionable:
         for s in actionable:
             lines.append(
                 f'{s["market"]} ({s["symbol"]}): {s["direction"]} | price {s["last_price"]} | '
@@ -357,7 +426,7 @@ def main() -> int:
     else:
         log.error("ntfy notification was NOT sent; check NTFY_TOPIC, NTFY_SERVER and NTFY_TOKEN")
     log.info("Saved %s", path)
-    scan_ok = result.get("markets_analyzed", 0) > 0 or result.get("status") == "OUTSIDE_SESSION"
+    scan_ok = result.get("markets_analyzed", 0) > 0
     return 2 if not sent else (0 if scan_ok else 1)
 
 
