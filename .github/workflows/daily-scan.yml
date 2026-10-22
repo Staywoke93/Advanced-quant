@@ -5,8 +5,12 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Weekdays, 12:00 UTC = 12:00 Ghana time. Session is 12:00-15:00 UTC.
-    - cron: "0 12 * * 1-5"
+    # 30 minutes before Tokyo open (Sun-Thu UTC, to cover Mon-Fri Tokyo sessions).
+    - cron: "30 23 * * 0-4"
+    # 30 minutes before Frankfurt/London opens in either DST regime.
+    - cron: "30 6,7 * * 1-5"
+    # 30 minutes before New York open / London-New York overlap in either DST regime.
+    - cron: "30 11,12 * * 1-5"
 
 permissions:
   contents: read
@@ -38,9 +42,9 @@ jobs:
           NTFY_SERVER: ${{ vars.NTFY_SERVER || 'https://ntfy.sh' }}
           ACCOUNT_EQUITY: ${{ vars.ACCOUNT_EQUITY || '1000' }}
           ACCOUNT_CURRENCY: ${{ vars.ACCOUNT_CURRENCY || 'USD' }}
-          SESSION_START_UTC: "12:00"
-          SESSION_END_UTC: "15:00"
-          ENFORCE_SESSION: "true"
+          SESSION_START_UTC: "00:00"
+          SESSION_END_UTC: "00:00"
+          ENFORCE_SESSION: "false"
           RISK_PER_TRADE: "0.0025"
           DAILY_LOSS_LIMIT: "0.01"
           MAX_SIMULTANEOUS_SIGNALS: "2"
