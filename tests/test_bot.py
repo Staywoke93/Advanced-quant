@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 import bot
+from market_data import validate_ohlc
 from backtest import backtest_frame
 
 
@@ -20,6 +21,16 @@ def sample_data(n=240, trend=0.001):
 
 
 class BotTests(unittest.TestCase):
+    def test_ohlc_validation_accepts_valid_sample(self):
+        result = validate_ohlc(sample_data())
+        self.assertEqual(result["errors"], [])
+
+    def test_ohlc_validation_rejects_impossible_candle(self):
+        data = sample_data()
+        data.iloc[-1, data.columns.get_loc("high")] = data.iloc[-1]["low"] * 0.5
+        result = validate_ohlc(data)
+        self.assertTrue(any("high below" in error for error in result["errors"]))
+
     def test_features_are_generated(self):
         f = bot.features(sample_data())
         self.assertGreater(len(f), 100)
