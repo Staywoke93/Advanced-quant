@@ -1,6 +1,8 @@
 name: Advanced three-hour quant scan
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     # Weekdays, 12:00 UTC = 12:00 Ghana time. Session is 12:00-15:00 UTC.
