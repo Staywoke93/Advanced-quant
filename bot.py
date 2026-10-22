@@ -486,27 +486,75 @@ def format_directional_outlook(signal: dict) -> str:
 
 
 def send_ntfy(title: str, message: str) -> bool:
+    """Publish to ntfy and verify the server's JSON acknowledgement."""
     if not NTFY_TOPIC:
-        log.info("NTFY_TOPIC unset; skipping push")
+        log.error("NTFY_TOPIC is unset; notification not sent")
         return False
-    headers = {"Title": title, "Priority": "default", "Tags": "chart_with_upwards_trend"}
+
+    # Keep the topic in GitHub Actions secrets, not hard-coded into the repo.
+    url = f"{NTFY_SERVER}/{NTFY_TOPIC}"
+    headers = {
+        "Title": title,
+        "Priority": "high",
+        "Tags": "chart_with_upwards_trend",
+        "Content-Type": "text/plain; charset=utf-8",
+    }
     if NTFY_TOKEN:
         headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
+
     for attempt in range(1, 4):
         try:
-            r = requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=message.encode(),
-                              headers=headers, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            log.info("ntfy accepted notification (HTTP %s)%s",
-                     r.status_code,
-                     f" after retry {attempt - 1}" if attempt > 1 else "")
+            response = requests.post(
+                url,
+                data=message.encode("utf-8"),
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+
+            # ntfy should return JSON for a successfully published message.
+            try:
+                receipt = response.json()
+            except ValueError:
+                log.error(
+                    "ntfy returned HTTP %s but no valid JSON acknowledgement",
+                    response.status_code,
+                )
+                return False
+
+            if receipt.get("event") != "message" or not receipt.get("id"):
+                log.error(
+                    "ntfy response did not confirm a published message "
+                    "(HTTP %s, event=%s, id_present=%s)",
+                    response.status_code,
+                    receipt.get("event", "missing"),
+                    bool(receipt.get("id")),
+                )
+                return False
+
+            # Do not log the topic, token, URL, or notification contents.
+            log.info(
+                "ntfy publish confirmed: HTTP=%s event=%s message_id=%s timestamp=%s",
+                response.status_code,
+                receipt.get("event"),
+                receipt.get("id"),
+                receipt.get("time", "missing"),
+            )
             return True
+
         except requests.RequestException as exc:
-            log.error("ntfy notification attempt %d/3 failed: %s", attempt, exc)
+            # Exception strings can contain URLs; avoid printing secrets/topic paths.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            log.error(
+                "ntfy publish attempt %d/3 failed (error_type=%s, HTTP=%s)",
+                attempt,
+                type(exc).__name__,
+                status if status is not None else "unavailable",
+            )
             if attempt < 3:
                 time.sleep(attempt * 2)
-    return False
 
+    return False
 
 def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
     now = now or utc_now()
