@@ -276,7 +276,15 @@ def send_ntfy(title: str, message: str) -> bool:
 def scan(now: Optional[datetime] = None, fetcher=fetch_history) -> dict:
     now = now or utc_now()
     if ENFORCE_SESSION and not in_session(now):
-        return {"generated_at_utc": now.isoformat(), "status": "OUTSIDE_SESSION", "signals": []}
+        return {
+            "generated_at_utc": now.isoformat(),
+            "status": "OUTSIDE_SESSION",
+            "session_utc": f"{SESSION_START_UTC}-{SESSION_END_UTC}",
+            "markets_requested": len(MARKETS),
+            "markets_analyzed": 0,
+            "failures": [],
+            "signals": [],
+        }
     results, failures = [], []
     for market, symbol in MARKETS.items():
         raw = fetcher(symbol)
@@ -322,7 +330,13 @@ def main() -> int:
         "Research alerts only. Confidence is NOT a win probability. No orders are placed.",
         ""
     ]
-    if actionable:
+    if result.get("status") == "OUTSIDE_SESSION":
+        lines.append(
+            "SCAN SKIPPED: current time is outside the configured session. "
+            "No market data was fetched; 0/12 markets analysed is expected. "
+            "This is not a no-signal result."
+        )
+    elif actionable:
         for s in actionable:
             lines.append(
                 f'{s["market"]} ({s["symbol"]}): {s["direction"]} | price {s["last_price"]} | '
@@ -330,6 +344,11 @@ def main() -> int:
                 f'target {s["target_distance_pct"]:.2f}% | risk budget {s["risk_budget"]:.2f} {ACCOUNT_CURRENCY} | '
                 f'approx notional {s["suggested_notional"]:.2f}'
             )
+    elif result.get("markets_analyzed", 0) == 0:
+        lines.append("DATA ERROR: zero markets were analysed. This is not a no-signal result.")
+        for failure in result.get("failures", [])[:4]:
+            lines.append(f'Data issue — {failure.get("market", "Unknown")}: {failure.get("reason", "unknown error")}')
+        lines.append("Check the GitHub Actions scan logs and the market-data provider.")
     else:
         lines.append("No signals passed the filters. No trade is a valid decision.")
     sent = send_ntfy("Advanced 3-hour quant scan", "\n".join(lines))
