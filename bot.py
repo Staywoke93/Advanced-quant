@@ -123,8 +123,13 @@ def rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
     up = delta.clip(lower=0).ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     down = (-delta.clip(upper=0)).ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    # Handle zero-loss and flat windows explicitly; otherwise a monotonic
+    # rising series produces NaN RSI values and drops every feature row.
     rs = up / down.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    result = 100 - 100 / (1 + rs)
+    result = result.mask((down == 0) & (up > 0), 100.0)
+    result = result.mask((down == 0) & (up == 0), 50.0)
+    return result
 
 
 def features(df: pd.DataFrame) -> pd.DataFrame:
