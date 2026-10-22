@@ -439,6 +439,14 @@ def main() -> int:
     events = session_events(now)
     if not events:
         log.info("No session-open or one-hour follow-up event at %s; no notification sent.", format_gmt(now.isoformat()))
+        # Record why this run did not scan, so workflow_dispatch produces a useful artifact.
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        path = OUTPUT_DIR / f"scan-skipped-{now.date().isoformat()}-{now:%H%M}.json"
+        path.write_text(json.dumps({
+            "timestamp_gmt": format_gmt(now.isoformat()),
+            "status": "skipped_no_scheduled_session_event",
+            "message": "This run was outside the session-open and one-hour follow-up windows. No market scan or trading signal was generated."
+        }, indent=2), encoding="utf-8")
         return 0
 
     open_events = [event for event in events if event["mode"] in ("open", "overlap")]
