@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -204,23 +205,105 @@ class BotTests(unittest.TestCase):
         events = bot.session_events(now)
         self.assertTrue(any(e["mode"] == "overlap" for e in events))
 
+    def test_every_session_open_is_detected_in_winter_and_summer(self):
+        # Test each configured local opening, converted with its real IANA timezone.
+        for date in ((2025, 1, 6), (2025, 7, 7)):
+            for definition in bot.SESSION_DEFINITIONS:
+                with self.subTest(season=date, session=definition["name"]):
+                    zone = ZoneInfo(definition["timezone"])
+                    local_open = datetime(*date, definition["open_hour"],
+                                          definition["open_minute"], tzinfo=zone)
+                    now = local_open.astimezone(timezone.utc) + pd.Timedelta(minutes=5)
+                    events = bot.session_events(now.to_pydatetime() if hasattr(now, "to_pydatetime") else now)
+                    self.assertTrue(any(
+                        e["mode"] == "open" and e["name"] == definition["name"]
+                        for e in events
+                    ), f"Missing {definition['name']} open at {now}")
+
+    def test_london_new_york_overlap_is_detected_across_dst_transitions(self):
+        # These dates cover US DST before Europe changes, both on DST, and both on standard time.
+        dates = [
+            datetime(2025, 3, 10, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2025, 3, 31, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2025, 11, 3, 8, 5, tzinfo=ZoneInfo("America/New_York")),
+        ]
+        for local_ny_open in dates:
+            with self.subTest(local_date=local_ny_open.date()):
+                events = bot.session_events(local_ny_open.astimezone(timezone.utc))
+                self.assertTrue(any(
+                    e["mode"] == "overlap" and "London" in e["name"] and "New York" in e["name"]
+                    for e in events
+                ))
+
+    def test_overlap_notification_has_own_title_and_does_not_require_scan(self):
+        now = datetime(2025, 1, 6, 13, 5, tzinfo=timezone.utc)
+        with patch("bot.validate_config"), patch("bot.utc_now", return_value=now), \
+             patch("bot.session_events", return_value=[
+                 {"mode": "open", "name": "New York", "open_gmt": now.isoformat(), "age_minutes": 5},
+                 {"mode": "overlap", "name": "London–Frankfurt–New York overlap",
+                  "open_gmt": now.isoformat(), "age_minutes": 0},
+             ]), patch("bot.send_ntfy", return_value=True) as send, \
+             patch("bot.scan") as market_scan:
+            self.assertEqual(bot.main(), 0)
+        self.assertEqual(send.call_args.args[0], "LONDON–NEW YORK MARKET OVERLAP")
+        self.assertIn("OVERLAP IS NOW OPEN", send.call_args.args[1])
+        market_scan.assert_not_called()
+
+    def test_session_open_notification_is_sent_even_without_actionable_signals(self):
+        now = datetime(2025, 1, 6, 8, 5, tzinfo=timezone.utc)
+        with patch("bot.validate_config"), patch("bot.utc_now", return_value=now), \
+             patch("bot.session_events", return_value=[
+                 {"mode": "open", "name": "London", "open_gmt": now.isoformat(), "age_minutes": 5}
+             ]), patch("bot.send_ntfy", return_value=True) as send, \
+             patch("bot.scan") as market_scan:
+            self.assertEqual(bot.main(), 0)
+        self.assertEqual(send.call_args.args[0], "MARKET SESSION OPEN")
+        market_scan.assert_not_called()
+
     def test_ntfy_success_is_reported_and_returns_true(self):
         response = Mock()
         response.status_code = 200
         response.raise_for_status.return_value = None
-        with patch("bot.requests.post", return_value=response) as post, \
+        with patch("bot.NTFY_TOPIC", "test-topic"), \
+             patch("bot.requests.post", return_value=response) as post, \
              patch("bot.log.info") as info:
             sent = bot.send_ntfy("Test alert", "Test message")
         self.assertTrue(sent)
         post.assert_called_once()
-        self.assertIn("/" + bot.NTFY_TOPIC, post.call_args.args[0])
+        self.assertIn("/test-topic", post.call_args.args[0])
         info.assert_called()
 
     def test_ntfy_failure_returns_false(self):
         import requests
-        with patch("bot.requests.post", side_effect=requests.Timeout("timeout")), \
+        with patch("bot.NTFY_TOPIC", "test-topic"), \
+             patch("bot.requests.post", side_effect=requests.Timeout("timeout")), \
              patch("bot.time.sleep"):
             self.assertFalse(bot.send_ntfy("Test alert", "Test message"))
+
+    def test_conflicting_six_bar_momentum_forces_wait(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "LONG", "forecast_outlook": "RISE",
+            "status": "SIGNAL", "last_price": 1.0, "confidence_score": 0.90,
+            "reasons": ["EMA trend alignment bullish", "6-bar momentum negative"],
+        })
+        self.assertIn("WAIT", line)
+
+    def test_conflicting_rsi_and_trend_forces_wait(self):
+        line = bot.format_directional_outlook({
+            "market": "Test", "direction": "LONG", "forecast_outlook": "RISE",
+            "status": "SIGNAL", "last_price": 1.0, "confidence_score": 0.90,
+            "reasons": ["EMA trend alignment bullish", "overbought caution (78.0)"],
+        })
+        self.assertIn("WAIT", line)
+
+    def test_negative_signal_cap_is_rejected(self):
+        old = bot.MAX_SIMULTANEOUS_SIGNALS
+        try:
+            bot.MAX_SIMULTANEOUS_SIGNALS = -1
+            with self.assertRaises(ValueError):
+                bot.validate_config()
+        finally:
+            bot.MAX_SIMULTANEOUS_SIGNALS = old
 
     def test_invalid_config_rejected(self):
         old = bot.RISK_PER_TRADE

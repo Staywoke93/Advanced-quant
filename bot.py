@@ -54,7 +54,7 @@ ENFORCE_SESSION = os.getenv("ENFORCE_SESSION", "true").lower() == "true"
 DATA_INTERVAL = os.getenv("DATA_INTERVAL", "1h")
 DATA_PERIOD = os.getenv("DATA_PERIOD", "730d")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "nii-gold-forex-bot").strip()
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
 NTFY_SERVER = (os.getenv("NTFY_SERVER") or "https://ntfy.sh").strip().rstrip("/")
 NTFY_TOKEN = os.getenv("NTFY_TOKEN", "").strip()
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -336,8 +336,10 @@ def score_row(row: pd.Series) -> tuple[str, float, list[str]]:
         reasons.append("3-bar momentum negative")
     if row["ret_6"] > 0:
         score += min(0.12, abs(float(row["ret_6"])) * 10)
+        reasons.append("6-bar momentum positive")
     elif row["ret_6"] < 0:
         score -= min(0.12, abs(float(row["ret_6"])) * 10)
+        reasons.append("6-bar momentum negative")
     rv = float(row["rsi"])
     if 50 <= rv <= 68:
         score += 0.12
@@ -351,6 +353,8 @@ def score_row(row: pd.Series) -> tuple[str, float, list[str]]:
     elif rv <= 25:
         score += 0.06
         reasons.append(f"oversold caution ({rv:.1f})")
+    else:
+        reasons.append(f"RSI neutral ({rv:.1f})")
     direction = "LONG" if score > 0 else "SHORT" if score < 0 else "NO_TRADE"
     confidence = min(0.90, 0.50 + abs(score) * 0.70)
     return direction, confidence, reasons
@@ -377,6 +381,12 @@ def validate_config() -> None:
         raise ValueError("DAILY_LOSS_LIMIT must be in (0, 3%]")
     if not 0.50 <= MIN_CONFIDENCE <= 0.90:
         raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.90")
+    if MAX_SIMULTANEOUS_SIGNALS < 0:
+        raise ValueError("MAX_SIMULTANEOUS_SIGNALS must be zero or greater")
+    if not 0 < MIN_ATR_PCT < MAX_ATR_PCT:
+        raise ValueError("ATR safety band must satisfy 0 < MIN_ATR_PCT < MAX_ATR_PCT")
+    if REQUEST_TIMEOUT < 1:
+        raise ValueError("REQUEST_TIMEOUT must be at least one second")
     if HORIZON_BARS < 1:
         raise ValueError("HORIZON_BARS must be at least 1")
     # Validate clock strings.
@@ -446,12 +456,20 @@ def format_directional_outlook(signal: dict) -> str:
         reasons = [str(reasons)] if reasons else []
     reason_text = "; ".join(str(reason) for reason in reasons) if reasons else "no indicator reasons supplied"
 
-    # If directional evidence explicitly conflicts, don't manufacture a strong call.
+    # Treat disagreements among trend, momentum and RSI as WAIT.
+    # A high aggregate score must not hide a conflicting indicator.
     reason_lower = " ".join(str(reason).lower() for reason in reasons)
+    bullish_trend = "ema trend alignment bullish" in reason_lower
+    bearish_trend = "ema trend alignment bearish" in reason_lower
+    positive_momentum = "momentum positive" in reason_lower
+    negative_momentum = "momentum negative" in reason_lower
+    bullish_rsi = "rsi supportive" in reason_lower or "oversold caution" in reason_lower
+    bearish_rsi = "rsi supports bearish momentum" in reason_lower or "overbought caution" in reason_lower
     conflict = (
-        ("ema trend alignment bullish" in reason_lower and "momentum negative" in reason_lower)
-        or ("ema trend alignment bearish" in reason_lower and "momentum positive" in reason_lower)
-        or ("bullish" in reason_lower and "bearish" in reason_lower)
+        (bullish_trend and (negative_momentum or bearish_rsi))
+        or (bearish_trend and (positive_momentum or bullish_rsi))
+        or (positive_momentum and negative_momentum)
+        or (bullish_rsi and bearish_rsi)
     )
     if side == "WAIT" or conflict or outlook == "UNCERTAIN":
         call = "WAIT — mixed/uncertain indicators"
@@ -568,25 +586,29 @@ def main() -> int:
 
     if open_events:
         names = sorted({event["name"] for event in open_events})
-        message = [
-            f"Market session opened | {format_gmt(now.isoformat())}",
-            "Session(s): " + ", ".join(names),
-            "Times shown in GMT (UTC+0).",
-        ]
-        if any(event["mode"] == "overlap" for event in open_events):
-            # Evaluate historical volatility at the overlap opening; do not assume overlap always means high volatility.
-            overlap_result = scan(now)
-            high_vol = [s for s in overlap_result["signals"] if s.get("volatility_ratio", 1) >= 1.5]
-            message.append(f"Historical-volatility check: {len(high_vol)} market(s) at least 1.5x their recent 24-hour ATR baseline.")
-            if high_vol:
-                message.append("HIGH VOLATILITY DETECTED:")
-                for s in sorted(high_vol, key=lambda item: item.get("volatility_ratio", 1), reverse=True)[:6]:
-                    message.append(f'{s["market"]}: {s["volatility_ratio"]:.2f}x recent ATR | {s["direction"]} ({s["status"]})')
-            else:
-                message.append("No unusual volatility threshold was met; overlap alone is not a trade signal.")
-        sent = send_ntfy("Market session opened", "\n".join(message))
+        is_overlap = any(event["mode"] == "overlap" for event in open_events)
+        if is_overlap:
+            title = "LONDON–NEW YORK MARKET OVERLAP"
+            message = [
+                f"⚡ LONDON–NEW YORK OVERLAP IS NOW OPEN | {format_gmt(now.isoformat())}",
+                "London and New York are both in their active trading sessions.",
+                "Frankfurt is also included in the overlap check where its session is active.",
+                "This is a session-timing alert, not a trade recommendation.",
+                "Times shown in GMT (UTC+0).",
+            ]
+        else:
+            title = "MARKET SESSION OPEN"
+            message = [
+                f"Market session opened | {format_gmt(now.isoformat())}",
+                "Session(s): " + ", ".join(names),
+                "Times shown in GMT (UTC+0).",
+                "Session alerts are sent regardless of whether any market has an actionable trade signal.",
+            ]
+        # Send the session event first and independently. Never wait for a market scan
+        # or let the absence of actionable signals suppress the session notification.
+        sent = send_ntfy(title, "\n".join(message))
         if not sent:
-            log.error("Could not send session-open notification.")
+            log.error("Could not send session notification: %s", title)
             return 2
 
     if scan_events:
